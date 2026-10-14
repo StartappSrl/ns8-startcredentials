@@ -1,0 +1,25 @@
+{
+  "name": "@startcredentials/client",
+  "version": "0.1.0",
+  "description": "SDK client di StartCredentials: API, flussi crittografici e import",
+  "license": "GPL-3.0-or-later",
+  "type": "module",
+  "main": "dist/src/index.js",
+  "types": "dist/src/index.d.ts",
+  "scripts": {
+    "build": "tsc -p .",
+    "test": "tsc -p . && node --test dist/test/*.test.js"
+  },
+  "dependencies": {
+    "@serenity-kit/opaque": "1.1.0",
+    "@startcredentials/crypto": "0.1.0",
+    "fflate": "0.8.2",
+    "hash-wasm": "4.12.0",
+    "kdbxweb": "2.1.1",
+    "shamir-secret-sharing": "0.0.4"
+  },
+  "devDependencies": {
+    "@types/node": "22.10.2",
+    "typescript": "5.7.2"
+  }
+}

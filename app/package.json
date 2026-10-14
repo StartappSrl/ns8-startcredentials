@@ -1,0 +1,29 @@
+{
+  "name": "@startcredentials/app",
+  "version": "0.1.0",
+  "private": true,
+  "license": "GPL-3.0-or-later",
+  "type": "module",
+  "main": "dist/src/main.js",
+  "scripts": {
+    "build": "tsc -p .",
+    "start": "node dist/src/main.js",
+    "test": "tsc -p . && node --test --test-concurrency=1 dist/test/*.test.js"
+  },
+  "dependencies": {
+    "@serenity-kit/opaque": "1.1.0",
+    "@startcredentials/crypto": "0.1.0",
+    "fastify": "5.2.1",
+    "libsodium-wrappers-sumo": "0.7.15",
+    "nodemailer": "6.9.16",
+    "pg": "8.13.1",
+    "zod": "3.24.1"
+  },
+  "devDependencies": {
+    "@startcredentials/client": "0.1.0",
+    "@types/node": "22.10.2",
+    "@types/nodemailer": "6.4.17",
+    "@types/pg": "8.11.10",
+    "typescript": "5.7.2"
+  }
+}

@@ -33,12 +33,45 @@ function privateKeyContext(userId: string, keyVersion: number): string {
   return `sc:user-private:v1:${userId}:${keyVersion}`;
 }
 
+/** Serializzazione delle chiavi private (da usare solo dentro una busta cifrata). */
+export function serializePrivateKeys(keys: UserKeyPair): Uint8Array {
+  return utf8(JSON.stringify({ box: toB64(keys.boxPrivate), sign: toB64(keys.signPrivate), pub: keys.publicKeys }));
+}
+
+export function parsePrivateKeys(data: Uint8Array): UserKeyPair {
+  const parsed = JSON.parse(fromUtf8(data)) as { box: string; sign: string; pub: PublicKeys };
+  const keys = { publicKeys: parsed.pub, boxPrivate: fromB64(parsed.box), signPrivate: fromB64(parsed.sign) };
+  // Le chiavi pubbliche dichiarate devono corrispondere alle private.
+  const s = sodium();
+  if (toB64(s.crypto_scalarmult_base(keys.boxPrivate)) !== keys.publicKeys.box ||
+      toB64(s.crypto_sign_ed25519_sk_to_pk(keys.signPrivate)) !== keys.publicKeys.sign) {
+    throw new CryptoError("invalid_input", "Chiavi private e pubbliche non corrispondono");
+  }
+  return keys;
+}
+
+/** Cifra dati per una chiave pubblica X25519 (sigillo anonimo). */
+export function sealToPublicKey(data: Uint8Array, boxPublic: string): string {
+  return toB64(sodium().crypto_box_seal(data, fromB64(boxPublic)));
+}
+
+export function openSealed(sealed: string, boxPublic: string, boxPrivate: Uint8Array): Uint8Array {
+  try {
+    return sodium().crypto_box_seal_open(fromB64(sealed), fromB64(boxPublic), boxPrivate);
+  } catch {
+    throw new CryptoError("decryption_failed", "Impossibile aprire il sigillo");
+  }
+}
+
+/** Coppia X25519 da una chiave privata (per la chiave di recupero ricomposta). */
+export function boxPublicFromPrivate(boxPrivate: Uint8Array): string {
+  return toB64(sodium().crypto_scalarmult_base(boxPrivate));
+}
+
 /** Cifra le chiavi private con la master key. Il risultato va al server. */
 export function wrapPrivateKeys(masterKey: Uint8Array, keys: UserKeyPair, userId: string, keyVersion: number): string {
   const wrapKey = deriveSubkey(masterKey, 1, "scuserpk");
-  const payload = utf8(
-    JSON.stringify({ box: toB64(keys.boxPrivate), sign: toB64(keys.signPrivate), pub: keys.publicKeys }),
-  );
+  const payload = serializePrivateKeys(keys);
   try {
     return seal(wrapKey, payload, privateKeyContext(userId, keyVersion), `user:${userId}:${keyVersion}`);
   } finally {
@@ -52,8 +85,7 @@ export function unwrapPrivateKeys(masterKey: Uint8Array, wrapped: string, userId
   let payload: Uint8Array | undefined;
   try {
     payload = open(wrapKey, wrapped, privateKeyContext(userId, keyVersion));
-    const parsed = JSON.parse(fromUtf8(payload)) as { box: string; sign: string; pub: PublicKeys };
-    return { publicKeys: parsed.pub, boxPrivate: fromB64(parsed.box), signPrivate: fromB64(parsed.sign) };
+    return parsePrivateKeys(payload);
   } finally {
     wipe(wrapKey);
     wipe(payload);

@@ -24,7 +24,7 @@ export function newContainerKey(): Uint8Array {
   return newSymmetricKey();
 }
 
-function grantMessage(g: Omit<KeyGrant, "signature">): Uint8Array {
+export function grantMessage(g: Omit<KeyGrant, "signature">): Uint8Array {
   const s = sodium();
   const sealedHash = toB64(s.crypto_generichash(32, fromB64(g.sealedKey), null));
   return utf8(
