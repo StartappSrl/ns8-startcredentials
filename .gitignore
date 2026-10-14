@@ -109,3 +109,5 @@ dist/
 test-build/
 extension/startcredentials-extension.zip
 app/public/startcredentials-extension.zip
+__pycache__/
+*.pyc
