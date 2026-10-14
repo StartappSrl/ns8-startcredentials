@@ -30,7 +30,7 @@
     "enabled": "Enabled",
     "disabled": "Disabled",
     "bootstrap_title": "Create the first administrator",
-    "bootstrap_description": "Install the StartCredentials browser extension, connect it to {url} and use this activation code: {token}. The code stops working once the first administrator exists.",
+    "bootstrap_description": "Install the StartCredentials browser extension, connect it to {url} and enter the activation code below. It stops working once the first administrator exists. Activation code: {token}",
     "instance_url": "Open StartCredentials"
   },
   "about": {

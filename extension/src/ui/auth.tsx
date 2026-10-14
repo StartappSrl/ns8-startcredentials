@@ -95,6 +95,11 @@ function MasterPasswordFields({ pw, setPw, pw2, setPw2 }: { pw: string; setPw: (
   );
 }
 
+/** Il codice può arrivare con virgolette, spazi o un punto finale copiati per errore. */
+export function cleanToken(t: string): string {
+  return t.trim().replace(/^["'“”‘’\s]+|["'“”‘’.,;:\s]+$/g, "");
+}
+
 function checkPw(pw: string, pw2: string): string | null {
   if ([...pw].length < 12) return "La master password deve avere almeno 12 caratteri.";
   if (pw !== pw2) return "Le due password non coincidono.";
@@ -116,7 +121,7 @@ export function Register({ token, bootstrap, onDone }: { token?: string; bootstr
     if (bad) return setError(bad);
     run(async () => {
       const a = await api();
-      const r = await register(a, { token: tok.trim(), password: pw, email: bootstrap ? email : undefined, displayName: bootstrap ? name : undefined });
+      const r = await register(a, { token: cleanToken(tok), password: pw, email: bootstrap ? email : undefined, displayName: bootstrap ? name : undefined });
       await saveToken(r.token);
       if (bootstrap) await saveSettings({ email });
       onDone(pw);
