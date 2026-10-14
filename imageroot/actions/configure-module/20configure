@@ -1,36 +1,35 @@
 #!/usr/bin/env python3
 
 #
-# Copyright (C) 2023 Nethesis S.r.l.
+# Copyright (C) 2026 StartCredentials
 # SPDX-License-Identifier: GPL-3.0-or-later
 #
 
 import json
 import sys
+import os
 import agent
 import agent.tasks
-import os
 
 request = json.load(sys.stdin)
+host = request["host"]
+lets_encrypt = request["lets_encrypt"]
 
-# TODO: do something with the request payload. For example configure a
-# custom route in our web router. Here the path is hardcoded as
-# 'kickstart'.
+# Persist the configuration in the module environment
+agent.set_env("STARTCREDENTIALS_HOST", host)
+agent.set_env("STARTCREDENTIALS_LETS_ENCRYPT", "true" if lets_encrypt else "false")
 
-# Configure Traefik to route "/kickstart" path requests to the kickstart
-# service. Since the "instance" attribute starts with MODULE_ID, the route
-# will be removed automatically with the module.
+# StartCredentials must be reachable only through HTTPS on its own
+# host name: the browser extension and the mobile app refuse plain HTTP.
 response = agent.tasks.run(
-    agent_id=agent.resolve_agent_id('traefik@node'),
-    action='set-route',
+    agent_id=agent.resolve_agent_id("traefik@node"),
+    action="set-route",
     data={
-        'instance': os.environ['MODULE_ID'],
-        'url':  'http://127.0.0.1:' + os.environ["TCP_PORT"],
-        'http2https': False,
-        'lets_encrypt': False,
-        'path': '/kickstart',
+        "instance": os.environ["MODULE_ID"],
+        "url": "http://127.0.0.1:" + os.environ["TCP_PORT"],
+        "host": host,
+        "http2https": True,
+        "lets_encrypt": lets_encrypt,
     },
 )
-
-# Check if traefik configuration has been successfull
-agent.assert_exp(response['exit_code'] == 0)
+agent.assert_exp(response["exit_code"] == 0)

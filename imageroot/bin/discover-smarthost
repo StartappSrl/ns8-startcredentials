@@ -15,7 +15,7 @@ rdb = agent.redis_connect(use_replica=True)
 smtp_settings = agent.get_smarthost_settings(rdb)
 
 with agent.safe_open("smarthost.env", "w") as efp:
-    # HINT for kickstart: adjust variable names as needed
+    # HINT for startcredentials: adjust variable names as needed
     print(f"SMTP_ENABLED={'1' if smtp_settings['enabled'] else ''}", file=efp)
     print(f"SMTP_HOST={smtp_settings['host']}", file=efp)
     print(f"SMTP_PORT={smtp_settings['port']}", file=efp)

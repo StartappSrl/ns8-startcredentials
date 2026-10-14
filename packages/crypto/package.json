@@ -1,0 +1,21 @@
+{
+  "name": "@startcredentials/crypto",
+  "version": "0.1.0",
+  "description": "Core crittografico zero-knowledge di StartCredentials",
+  "license": "GPL-3.0-or-later",
+  "type": "module",
+  "main": "dist/src/index.js",
+  "types": "dist/src/index.d.ts",
+  "scripts": {
+    "build": "tsc -p .",
+    "test": "tsc -p . && node --test dist/test/*.test.js"
+  },
+  "dependencies": {
+    "libsodium-wrappers-sumo": "0.7.15"
+  },
+  "devDependencies": {
+    "@types/libsodium-wrappers-sumo": "0.7.8",
+    "@types/node": "22.10.2",
+    "typescript": "5.7.2"
+  }
+}

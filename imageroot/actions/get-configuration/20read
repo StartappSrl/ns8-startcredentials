@@ -1,14 +1,17 @@
 #!/usr/bin/env python3
 
 #
-# Copyright (C) 2023 Nethesis S.r.l.
+# Copyright (C) 2026 StartCredentials
 # SPDX-License-Identifier: GPL-3.0-or-later
 #
 
 import json
+import os
 import sys
-import agent
 
-config = {}
+config = {
+    "host": os.environ.get("STARTCREDENTIALS_HOST", ""),
+    "lets_encrypt": os.environ.get("STARTCREDENTIALS_LETS_ENCRYPT", "false") == "true",
+}
 
 json.dump(config, fp=sys.stdout)

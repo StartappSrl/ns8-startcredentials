@@ -1,8 +1,24 @@
 {
     "$schema": "http://json-schema.org/draft-07/schema#",
     "title": "configure-module input",
-    "$id": "http://schema.nethserver.org/kickstart/configure-module-input.json",
-    "description": "Configure kickstart",
-    "examples": [],
-    "type": "object"
+    "$id": "http://schema.nethserver.org/startcredentials/configure-module-input.json",
+    "description": "Configura StartCredentials",
+    "examples": [
+        {"host": "credenziali.example.com", "lets_encrypt": true}
+    ],
+    "type": "object",
+    "required": ["host", "lets_encrypt"],
+    "properties": {
+        "host": {
+            "type": "string",
+            "description": "Nome host pubblico (FQDN) dell'istanza",
+            "format": "idn-hostname",
+            "minLength": 1
+        },
+        "lets_encrypt": {
+            "type": "boolean",
+            "description": "Richiede un certificato Let's Encrypt per l'host"
+        }
+    },
+    "additionalProperties": false
 }
