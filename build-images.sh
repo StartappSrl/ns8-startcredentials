@@ -36,6 +36,11 @@ echo "Build dell'immagine applicativa..."
 buildah bud --layers -f app/Containerfile -t "${repobase}/${reponame}-app" .
 images+=("${repobase}/${reponame}-app")
 
+# Gli script del modulo devono essere eseguibili: l'agente NS8 salta i
+# passaggi senza permesso di esecuzione.
+find imageroot/actions -type f ! -name '*.json' -exec chmod 755 {} +
+chmod 755 imageroot/bin/* imageroot/events/*/*
+
 # Add imageroot directory to the container image
 buildah add "${container}" imageroot /imageroot
 buildah add "${container}" ui/dist /ui
