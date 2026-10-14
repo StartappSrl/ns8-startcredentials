@@ -211,6 +211,8 @@ try {
   const setup = await sdk.setupMfa(la);
   await sdk.enableMfa(la, totp(setup.secret));
   const laura = await sdk.Vault.unlock(la, "laura master password");
+  // L'amministratore esce e rientra nella pagina Utenti per vedere Laura attiva.
+  await nav("#/clienti");
   await nav("#/admin/utenti");
   await waitText("Da verificare");
   await click("Certifica");

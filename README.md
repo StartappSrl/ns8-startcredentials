@@ -1,106 +1,74 @@
 # ns8-startcredentials
 
-StartCredentials è un gestore di credenziali zero-knowledge per team che
-amministrano i sistemi dei clienti: contenitori cliente, password, codici OTP,
-allegati e condivisione tra utenti. Il server conserva solo dati cifrati sul
-dispositivo dell'utente.
+StartCredentials è un gestore zero-knowledge di password, codici OTP e allegati
+per i team che amministrano i sistemi dei clienti. Ogni cliente è un
+contenitore con la propria chiave; il server, distribuito come modulo
+[NethServer 8](https://github.com/NethServer/ns8-core), conserva solo dati
+cifrati sul dispositivo dell'utente.
 
-Questo repository è il modulo [NethServer 8](https://github.com/NethServer/ns8-core),
-creato dal template [ns8-kickstart](https://github.com/NethServer/ns8-kickstart).
+## Componenti
 
-## Stato: fase 0 (fondazioni)
-
-| Parte | Stato |
+| Cartella | Contenuto |
 | --- | --- |
-| `packages/crypto` – core crittografico | Implementato, 13 test verdi |
-| `imageroot/actions/configure-module` – host e Let's Encrypt | Implementato |
-| Backend API, frontend web, PostgreSQL | Fase 1 |
-| Estensione Chrome / Edge | Fase 2 |
-| App mobile | Fase 3 |
+| `packages/crypto` | Core crittografico (libsodium): Argon2id, X25519/Ed25519, XChaCha20-Poly1305, allegati a blocchi, TOTP |
+| `packages/client` | SDK usato da estensione e app mobile: API, flussi crittografici, import |
+| `app` | Backend Node.js (Fastify + PostgreSQL 16): API REST, login OPAQUE, MFA, audit a catena di hash |
+| `extension` | Estensione Manifest V3 per Chrome ed Edge: popup con compilazione automatica e applicazione completa |
+| `imageroot`, `ui` | Modulo NethServer 8: servizi, azioni, backup, pannello di amministrazione |
 
-Il servizio systemd avvia ancora il container di esempio del template:
-verrà sostituito dai container `app`, `web` e `db` nella fase 1.
-
-## Core crittografico
+## Installazione su NethServer 8
 
 ```
-cd packages/crypto
-npm install
-npm test
+add-module ghcr.io/<org>/startcredentials:latest 1
+api-cli run module/startcredentials1/configure-module --data '{"host": "credenziali.example.com", "lets_encrypt": true}'
 ```
 
-Primitive (tutte da libsodium): Argon2id per la master key, X25519 ed
-Ed25519 per le chiavi utente, XChaCha20-Poly1305 per i dati, secretstream
-per gli allegati, BLAKE2b per gli hash dei domini, HMAC Web Crypto per TOTP.
-Ogni blob cifrato è legato al proprio contesto (contenitore, elemento,
-versione) e non può essere spostato su un altro record.
+Il modulo avvia un pod rootless con l'applicazione e PostgreSQL, pubblica
+l'host tramite Traefik solo in HTTPS e usa lo smarthost del cluster per gli inviti.
 
-## Install
+### Primo amministratore
 
-Instantiate the module with:
+1. Nel pannello NethServer, pagina **Impostazioni** del modulo, copia il codice di attivazione.
+2. Scarica l'estensione da `https://<host>/download/startcredentials-extension.zip`
+   (oppure distribuiscila con i criteri di gruppo di Chrome/Edge) e installala.
+3. Nell'estensione inserisci l'indirizzo del server, poi codice di attivazione, nome, email e master password.
+4. Attiva l'MFA e, dalla pagina **Organizzazione**, inizializzala: stampa le quote di recupero e consegnale a persone diverse.
 
-    add-module ghcr.io/nethserver/startcredentials:latest 1
+Il codice di attivazione smette di funzionare dopo la creazione del primo amministratore.
 
-The output of the command will return the instance name.
-Output example:
+### Backup e ripristino
 
-    {"module_id": "startcredentials1", "image_name": "startcredentials", "image_url": "ghcr.io/nethserver/startcredentials:latest"}
+Il backup di NethServer include il dump del database (`module-dump-state`),
+i segreti dell'istanza e il volume degli allegati. Tutti i dati sono cifrati
+lato client: il backup non contiene password, OTP o allegati in chiaro.
+Al ripristino il dump viene ricaricato automaticamente al primo avvio di PostgreSQL.
 
-## Configure
+## Modello di sicurezza in breve
 
-Let's assume that the startcredentials instance is named `startcredentials1`.
+- La master password non lascia mai il dispositivo: login con OPAQUE, chiavi derivate con Argon2id (256 MiB).
+- Ogni cliente ha una chiave propria, consegnata a ogni membro cifrata con la sua chiave pubblica e firmata da chi la concede; il server verifica la firma.
+- Le chiavi dei colleghi sono certificate da un amministratore dopo il confronto dell'impronta a voce; l'estensione fissa la chiave dell'organizzazione al primo accesso.
+- Revocare un membro ruota la chiave del cliente in modo atomico.
+- Il recupero di un account richiede almeno 2 quote Shamir su 3 e un codice comunicato all'utente su un canale separato.
+- La compilazione automatica avviene solo su corrispondenza esatta del nome host, in HTTPS, nel frame principale.
+- Il registro di audit è una catena di hash: una modifica diretta al database viene rilevata.
 
-Launch `configure-module`, by setting the following parameters:
-- `host`: nome host pubblico (FQDN) dell'istanza
-- `lets_encrypt`: `true` per richiedere il certificato Let's Encrypt
+## Sviluppo e test
 
-Example:
+Serve Node.js 22 e un PostgreSQL di test (`TEST_DATABASE_URL`, predefinito `postgres://sc:sc@127.0.0.1/sc`).
 
-    api-cli run module/startcredentials1/configure-module --data '{"host": "credenziali.example.com", "lets_encrypt": true}'
+```
+npm ci
+npm test -w packages/crypto          # 13 test del core crittografico
+npm run build -w packages/client
+npm test -w app                      # 9 scenari end-to-end su server e database reali
+npm run build -w extension           # produce extension/startcredentials-extension.zip
+npm run test:ui -w extension         # test di fumo dell'interfaccia (jsdom + server reale)
+./build-images.sh                    # immagini del modulo e dell'applicazione (buildah)
+```
 
-The above command will:
-- start and configure the startcredentials instance
-- (describe configuration process)
-- ...
+## Stato
 
-Send a test HTTP request to the startcredentials backend service:
-
-    curl http://127.0.0.1/startcredentials/
-
-## Smarthost setting discovery
-
-Some configuration settings, like the smarthost setup, are not part of the
-`configure-module` action input: they are discovered by looking at some
-Redis keys.  To ensure the module is always up-to-date with the
-centralized [smarthost
-setup](https://nethserver.github.io/ns8-core/core/smarthost/) every time
-startcredentials starts, the command `bin/discover-smarthost` runs and refreshes
-the `state/smarthost.env` file with fresh values from Redis.
-
-Furthermore if smarthost setup is changed when startcredentials is already
-running, the event handler `events/smarthost-changed/10reload_services`
-restarts the main module service.
-
-See also the `systemd/user/startcredentials.service` file.
-
-This setting discovery is just an example to understand how the module is
-expected to work: it can be rewritten or discarded completely.
-
-## Uninstall
-
-To uninstall the instance:
-
-    remove-module --no-preserve startcredentials1
-
-## Running tests locally
-
-This module uses the NS8 standard testing infrastructure. For instructions on how to run the test suite locally, refer to the [Running tests locally](https://github.com/NethServer/ns8-github-actions/blob/v1/README.md#running-tests-locally) section of the ns8-github-actions README.
-
-## UI translation
-
-Translated with [Weblate](https://hosted.weblate.org/projects/ns8/).
-
-To setup the translation process:
-
-- add [GitHub Weblate app](https://docs.weblate.org/en/latest/admin/code-hosting.html#code-hosting-github-notifications) to your repository
-- add your repository to [hosted.weblate.org](https://hosted.weblate.org) or ask a NethServer developer to add it to ns8 Weblate project
+Fasi 0, 1 e 2 implementate e testate. Prima dell'uso in produzione servono un
+penetration test esterno e una revisione indipendente della crittografia.
+L'app mobile (fase 3) userà `packages/crypto` e `packages/client`.
