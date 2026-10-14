@@ -36,7 +36,7 @@ export interface ContainerMeta { name: string; sector?: string; notes?: string; 
 export interface Folder { id: string; parentId: string | null; name: string }
 export interface Container {
   id: string; kind: "client" | "personal" | "org"; keyVersion: number; permission: Permission;
-  meta: ContainerMeta; members: number; items: number; totpItems: number; updatedAt: string;
+  meta: ContainerMeta; members: number; items: number; totpItems: number; updatedAt: string; grantedBy: string;
 }
 export interface Attachment { id: string; name: string; mime: string; size: number; chunkCount: number; header: string; fkEnc: string }
 export interface Item {
@@ -330,7 +330,7 @@ export class Vault {
     return {
       id: r.id, kind: r.kind, keyVersion: r.keyVersion, permission: r.grant.permission,
       meta: unjson<ContainerMeta>(open(k.metaKey, r.metaEnc, ctxs.meta(r.id))),
-      members: r.members, items: r.items, totpItems: r.totpItems, updatedAt: r.updatedAt,
+      members: r.members, items: r.items, totpItems: r.totpItems, updatedAt: r.updatedAt, grantedBy: r.grant.grantedBy,
     };
   }
 

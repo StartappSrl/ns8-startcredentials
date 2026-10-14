@@ -1,1 +1,26 @@
-{"name":"@startcredentials/extension","version":"0.1.0","private":true}
+{
+  "name": "@startcredentials/extension",
+  "version": "0.1.0",
+  "private": true,
+  "license": "GPL-3.0-or-later",
+  "type": "module",
+  "scripts": {
+    "build": "tsc --noEmit -p . && node build.mjs",
+    "typecheck": "tsc --noEmit -p .",
+    "test:ui": "esbuild src/app.tsx --bundle --platform=node --format=cjs --target=node22 --jsx=automatic --jsx-import-source=preact --outfile=test-build/app.cjs --log-level=warning && node test/ui-smoke.mjs"
+  },
+  "dependencies": {
+    "@fontsource/jetbrains-mono": "5.1.1",
+    "@fontsource/plus-jakarta-sans": "5.1.1",
+    "@startcredentials/client": "0.1.0",
+    "preact": "10.25.4",
+    "qrcode-generator": "1.4.4"
+  },
+  "devDependencies": {
+    "@types/chrome": "0.0.287",
+    "esbuild": "0.24.2",
+    "fflate": "0.8.2",
+    "jsdom": "^25.0.1",
+    "typescript": "5.7.2"
+  }
+}

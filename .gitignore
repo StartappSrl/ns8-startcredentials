@@ -106,3 +106,6 @@ dist
 tests/outputs/
 node_modules/
 dist/
+test-build/
+extension/startcredentials-extension.zip
+app/public/startcredentials-extension.zip
