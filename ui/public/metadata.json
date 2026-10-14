@@ -11,13 +11,13 @@
   "authors": [
     {
       "name": "StartCredentials",
-      "email": "<email>"
+      "email": "support@startappitalia.it"
     }
   ],
   "docs": {
-    "documentation_url": "https://github.com/<org>/ns8-startcredentials#readme",
-    "bug_url": "https://github.com/<org>/ns8-startcredentials/issues",
-    "code_url": "https://github.com/<org>/ns8-startcredentials"
+    "documentation_url": "https://github.com/startappsrl/ns8-startcredentials#readme",
+    "bug_url": "https://github.com/startappsrl/ns8-startcredentials/issues",
+    "code_url": "https://github.com/startappsrl/ns8-startcredentials"
   },
-  "source": "ghcr.io/<org>/startcredentials"
+  "source": "ghcr.io/startappsrl/startcredentials"
 }

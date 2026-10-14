@@ -19,7 +19,7 @@ cifrati sul dispositivo dell'utente.
 ## Installazione su NethServer 8
 
 ```
-add-module ghcr.io/<org>/startcredentials:latest 1
+add-module ghcr.io/startappsrl/startcredentials:latest 1
 api-cli run module/startcredentials1/configure-module --data '{"host": "credenziali.example.com", "lets_encrypt": true}'
 ```
 
