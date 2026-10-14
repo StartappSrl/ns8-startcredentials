@@ -1,26 +1,48 @@
 name: "Publish images"
 
+# Workflow autonomo: costruisce e pubblica le immagini del modulo senza
+# dipendere da workflow riutilizzabili di altre organizzazioni.
+
 on:
   push:
+    branches: [main]
+    tags: ["*"]
   workflow_dispatch:
 
 permissions:
+  contents: read
   packages: write
-  actions: read
-  contents: write
-  security-events: write
+
+concurrency:
+  group: publish-${{ github.ref_name }}
+  cancel-in-progress: true
 
 jobs:
-  publish-images:
-    if: github.run_number > 1
-    uses: NethServer/ns8-github-actions/.github/workflows/publish-branch.yml@v1
-  module:
-    needs: publish-images
-    uses: NethServer/ns8-github-actions/.github/workflows/module-info.yml@v1
-  trivy:
-    needs: module
+  publish:
+    name: Build e pubblicazione immagini
+    runs-on: ubuntu-24.04
+    env:
+      REPOBASE: ghcr.io/${{ github.repository_owner }}
+      IMAGETAG: ${{ github.ref_name }}
+    steps:
+      - uses: actions/checkout@v4
 
-    if: ${{ needs.module.outputs.release == 'stable' || needs.module.outputs.release == 'latest' || github.event_name == 'workflow_dispatch' }}
-    uses: NethServer/ns8-github-actions/.github/workflows/scan-with-trivy.yml@v1
-    with:
-      images: ${{ needs.module.outputs.images }}
+      - name: Build delle immagini
+        id: build
+        run: |
+          export REPOBASE="${REPOBASE,,}"
+          export IMAGETAG="${IMAGETAG//\//-}"
+          echo "IMAGETAG=${IMAGETAG}" >> "$GITHUB_ENV"
+          bash build-images.sh
+
+      - name: Pubblicazione su ghcr.io
+        run: |
+          trap 'buildah logout ghcr.io' EXIT
+          buildah login -u "${{ github.actor }}" --password-stdin ghcr.io <<<"${{ secrets.GITHUB_TOKEN }}"
+          for image in ${{ steps.build.outputs.images }}; do
+            buildah push "$image" "docker://${image}:${IMAGETAG}"
+            if [ "${IMAGETAG}" = "main" ]; then
+              buildah push "$image" "docker://${image}:latest"
+            fi
+            echo "::notice title=Immagine pubblicata::${image}:${IMAGETAG}"
+          done
