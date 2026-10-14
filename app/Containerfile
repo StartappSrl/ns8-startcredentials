@@ -1,0 +1,34 @@
+# Immagine dell'applicazione StartCredentials (contesto: radice del repository).
+
+FROM docker.io/library/node:22.12.0-bookworm-slim AS build
+WORKDIR /src
+COPY package.json package-lock.json ./
+COPY packages/crypto/package.json packages/crypto/
+COPY packages/client/package.json packages/client/
+COPY app/package.json app/
+COPY extension/package.json extension/
+RUN npm ci --no-audit --no-fund
+COPY packages packages
+COPY app app
+COPY extension extension
+RUN npm run build -w packages/crypto \
+ && npm run build -w packages/client \
+ && npm run build -w extension \
+ && npx tsc -p app/tsconfig.build.json \
+ && npm prune --omit=dev --no-audit --no-fund
+
+FROM docker.io/library/node:22.12.0-bookworm-slim
+ENV NODE_ENV=production PORT=8080
+WORKDIR /srv/startcredentials
+COPY --from=build /src/node_modules ./node_modules
+COPY --from=build /src/packages/crypto/package.json packages/crypto/package.json
+COPY --from=build /src/packages/crypto/dist packages/crypto/dist
+COPY --from=build /src/packages/client/package.json packages/client/package.json
+COPY --from=build /src/packages/client/dist packages/client/dist
+COPY --from=build /src/app/package.json app/package.json
+COPY --from=build /src/app/dist app/dist
+COPY --from=build /src/app/migrations app/migrations
+COPY --from=build /src/app/public app/public
+USER node
+EXPOSE 8080
+CMD ["node", "app/dist/src/main.js"]

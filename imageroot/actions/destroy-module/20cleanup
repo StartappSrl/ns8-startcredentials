@@ -1,0 +1,4 @@
+#!/bin/bash
+
+# Volumi, servizi e route Traefik vengono rimossi dal core di NethServer.
+rm -rf restore

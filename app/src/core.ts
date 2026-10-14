@@ -20,7 +20,7 @@ export interface Config {
   sessionHours: number;
   /** Tentativi di autenticazione al minuto per indirizzo IP. */
   authPerIpPerMinute?: number;
-  smtp?: { host: string; port: number; user?: string; pass?: string; secure: boolean; from: string };
+  smtp?: { host: string; port: number; user?: string; pass?: string; encryption: "tls" | "starttls" | "none"; tlsVerify: boolean; from: string };
 }
 
 export function loadConfig(env = process.env): Config {
@@ -42,14 +42,16 @@ export function loadConfig(env = process.env): Config {
     maxAttachmentBytes: Number(env.MAX_ATTACHMENT_MB ?? 50) * 1024 * 1024,
     sessionHours: Number(env.SESSION_HOURS ?? 12),
     authPerIpPerMinute: Number(env.AUTH_RATE_LIMIT ?? 30),
-    smtp: env.SMTP_HOST && env.SMTP_ENABLED !== "0"
+    // Variabili prodotte da discover-smarthost di NethServer 8.
+    smtp: env.SMTP_HOST && env.SMTP_ENABLED === "1"
       ? {
           host: env.SMTP_HOST,
-          port: Number(env.SMTP_PORT ?? 587),
+          port: Number(env.SMTP_PORT || 587),
           user: env.SMTP_USERNAME || undefined,
           pass: env.SMTP_PASSWORD || undefined,
-          secure: env.SMTP_ENCRYPTION === "tls",
-          from: env.SMTP_FROM ?? `startcredentials@${host ?? "localhost"}`,
+          encryption: env.SMTP_ENCRYPTION === "tls" ? "tls" : env.SMTP_ENCRYPTION === "none" ? "none" : "starttls",
+          tlsVerify: env.SMTP_TLSVERIFY === "1",
+          from: env.SMTP_FROM || `no-reply@${host ?? "localhost"}`,
         }
       : undefined,
   };

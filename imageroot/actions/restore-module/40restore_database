@@ -1,0 +1,13 @@
+#!/bin/bash
+
+#
+# Ripristino: il dump viene messo in restore/, che il container PostgreSQL
+# esegue automaticamente al primo avvio con un volume dati vuoto.
+#
+
+set -e
+
+if [ -f startcredentials.sql ]; then
+    mkdir -p restore
+    mv startcredentials.sql restore/10-startcredentials.sql
+fi

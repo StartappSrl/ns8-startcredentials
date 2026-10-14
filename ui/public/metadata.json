@@ -1,19 +1,23 @@
 {
   "name": "startcredentials",
   "description": {
-    "en": "My startcredentials module"
+    "en": "Zero-knowledge password and OTP manager for teams that manage their clients' systems",
+    "it": "Gestore zero-knowledge di password e codici OTP per i team che gestiscono i sistemi dei clienti"
   },
-  "categories": [],
+  "categories": [
+    "security",
+    "collaboration"
+  ],
   "authors": [
     {
-      "name": "Name Surname",
-      "email": "author@yourmail.org"
+      "name": "StartCredentials",
+      "email": "<email>"
     }
   ],
   "docs": {
-    "documentation_url": "https://docs.startcredentials.com/",
-    "bug_url": "https://github.com/NethServer/dev",
-    "code_url": "https://github.com/author/ns8-startcredentials"
+    "documentation_url": "https://github.com/<org>/ns8-startcredentials#readme",
+    "bug_url": "https://github.com/<org>/ns8-startcredentials/issues",
+    "code_url": "https://github.com/<org>/ns8-startcredentials"
   },
-  "source": "ghcr.io/nethserver/startcredentials"
+  "source": "ghcr.io/<org>/startcredentials"
 }

@@ -12,8 +12,10 @@ export function createMailer(cfg: Config): Mailer {
   const t = nodemailer.createTransport({
     host: cfg.smtp.host,
     port: cfg.smtp.port,
-    secure: cfg.smtp.secure,
-    requireTLS: !cfg.smtp.secure,
+    secure: cfg.smtp.encryption === "tls",
+    requireTLS: cfg.smtp.encryption === "starttls",
+    ignoreTLS: cfg.smtp.encryption === "none",
+    tls: { rejectUnauthorized: cfg.smtp.tlsVerify },
     auth: cfg.smtp.user ? { user: cfg.smtp.user, pass: cfg.smtp.pass } : undefined,
   });
   return {

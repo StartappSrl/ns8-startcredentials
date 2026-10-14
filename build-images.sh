@@ -31,6 +31,11 @@ buildah run \
     nodebuilder-startcredentials \
     sh -c "corepack enable && yarn install && yarn build"
 
+# Immagine dell'applicazione (API, pagina iniziale, estensione scaricabile)
+echo "Build dell'immagine applicativa..."
+buildah bud --layers -f app/Containerfile -t "${repobase}/${reponame}-app" .
+images+=("${repobase}/${reponame}-app")
+
 # Add imageroot directory to the container image
 buildah add "${container}" imageroot /imageroot
 buildah add "${container}" ui/dist /ui
@@ -39,7 +44,7 @@ buildah config --entrypoint=/ \
     --label="org.nethserver.authorizations=traefik@node:routeadm" \
     --label="org.nethserver.tcp-ports-demand=1" \
     --label="org.nethserver.rootfull=0" \
-    --label="org.nethserver.images=docker.io/jmalloc/echo-server:latest" \
+    --label="org.nethserver.images=${repobase}/${reponame}-app:${IMAGETAG:-latest} docker.io/library/postgres:16.6-alpine" \
     "${container}"
 # Commit the image
 buildah commit "${container}" "${repobase}/${reponame}"

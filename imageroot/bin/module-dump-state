@@ -1,0 +1,15 @@
+#!/bin/bash
+
+#
+# Prima di ogni backup: dump coerente del database (i dati sono comunque cifrati).
+#
+
+set -e
+
+if ! systemctl --user -q is-active startcredentials-db.service; then
+    echo "Database non attivo: dump saltato" 1>&2
+    exit 0
+fi
+
+podman exec startcredentials-db pg_dump -U startcredentials --no-owner --clean --if-exists startcredentials > startcredentials.sql.tmp
+mv startcredentials.sql.tmp startcredentials.sql

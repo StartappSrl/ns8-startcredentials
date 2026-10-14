@@ -4,12 +4,25 @@
     "$id": "http://schema.nethserver.org/startcredentials/get-configuration-output.json",
     "description": "Configurazione corrente di StartCredentials",
     "examples": [
-        {"host": "credenziali.example.com", "lets_encrypt": true}
+        {
+            "host": "credenziali.example.com",
+            "lets_encrypt": true
+        }
     ],
     "type": "object",
-    "required": ["host", "lets_encrypt"],
+    "required": [
+        "host",
+        "lets_encrypt"
+    ],
     "properties": {
-        "host": {"type": "string"},
-        "lets_encrypt": {"type": "boolean"}
+        "host": {
+            "type": "string"
+        },
+        "lets_encrypt": {
+            "type": "boolean"
+        },
+        "bootstrap_token": {
+            "type": "string"
+        }
     }
 }

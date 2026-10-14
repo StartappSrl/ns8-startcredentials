@@ -1,12 +1,17 @@
 #!/bin/bash
 
 #
-# Copyright (C) 2023 Nethesis S.r.l.
+# Copyright (C) 2026 StartCredentials
 # SPDX-License-Identifier: GPL-3.0-or-later
 #
 
-# If the control reaches this step, the service can be enabled and started
+set -e
 
 touch smarthost.env
 
-systemctl --user enable --now startcredentials.service
+# Al primo avvio abilita il pod, ai successivi applica la nuova configurazione.
+if systemctl --user -q is-active startcredentials.service; then
+    systemctl --user restart startcredentials-app.service
+else
+    systemctl --user enable --now startcredentials.service
+fi
