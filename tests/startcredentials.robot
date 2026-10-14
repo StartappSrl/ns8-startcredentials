@@ -5,6 +5,7 @@ Library    SSHLibrary
 ${ADMIN_USER}    admin
 ${ADMIN_PASSWORD}    Nethesis,1234
 ${module_id}    ${EMPTY}
+${HOST}    credenziali.test.local
 
 *** Keywords ***
 Login to cluster-admin
@@ -14,6 +15,11 @@ Login to cluster-admin
     Fill Text    text="Password"    ${ADMIN_PASSWORD}
     Click    button >> text="Log in"
     Wait For Elements State    css=#main-content    visible    timeout=10s
+
+API is healthy
+    ${rc} =    Execute Command    curl -skf -H 'Host: ${HOST}' https://127.0.0.1/api/v1/health
+    ...    return_rc=True  return_stdout=False
+    Should Be Equal As Integers    ${rc}  0
 
 *** Test Cases ***
 Check if startcredentials is installed correctly
@@ -40,14 +46,32 @@ Take screenshots
     Close Browser
 
 Check if startcredentials can be configured
-    ${rc} =    Execute Command    api-cli run module/${module_id}/configure-module --data '{}'
+    ${rc} =    Execute Command    api-cli run module/${module_id}/configure-module --data '{"host": "${HOST}", "lets_encrypt": false}'
     ...    return_rc=True  return_stdout=False
     Should Be Equal As Integers    ${rc}  0
 
 Check if startcredentials works as expected
-    ${rc} =    Execute Command    curl -f http://127.0.0.1/startcredentials/
+    Wait Until Keyword Succeeds    30 times    3 seconds    API is healthy
+
+Check that the bootstrap code is available to the cluster admin
+    ${output}  ${rc} =    Execute Command    api-cli run module/${module_id}/get-configuration
+    ...    return_rc=True
+    Should Be Equal As Integers    ${rc}  0
+    Should Contain    ${output}    bootstrap_token
+
+Check security headers
+    ${output} =    Execute Command    curl -skI -H 'Host: ${HOST}' https://127.0.0.1/
+    Should Contain    ${output}    strict-transport-security
+    Should Contain    ${output}    x-frame-options: DENY
+
+Check backup state dump
+    ${rc} =    Execute Command    runagent -m ${module_id} module-dump-state
     ...    return_rc=True  return_stdout=False
     Should Be Equal As Integers    ${rc}  0
+    ${rc} =    Execute Command    runagent -m ${module_id} test -s startcredentials.sql
+    ...    return_rc=True  return_stdout=False
+    Should Be Equal As Integers    ${rc}  0
+    Execute Command    runagent -m ${module_id} module-cleanup-state
 
 Check if startcredentials is removed correctly
     ${rc} =    Execute Command    remove-module --no-preserve ${module_id}

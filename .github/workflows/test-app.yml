@@ -1,0 +1,43 @@
+name: Test applicazione
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-24.04
+    services:
+      postgres:
+        image: docker.io/library/postgres:16.6-alpine
+        env:
+          POSTGRES_USER: sc
+          POSTGRES_PASSWORD: sc
+          POSTGRES_DB: sc
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U sc" --health-interval 5s --health-timeout 5s --health-retries 10
+    env:
+      TEST_DATABASE_URL: postgres://sc:sc@127.0.0.1:5432/sc
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: Core crittografico
+        run: npm test -w packages/crypto
+      - name: SDK client
+        run: npm run build -w packages/client
+      - name: Backend end-to-end
+        run: npm test -w app
+      - name: Estensione (build e test di fumo dell'interfaccia)
+        run: npm run build -w extension && npm run test:ui -w extension
+      - uses: actions/upload-artifact@v4
+        with:
+          name: startcredentials-extension
+          path: extension/startcredentials-extension.zip
