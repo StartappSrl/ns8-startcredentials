@@ -3,8 +3,10 @@ import { build } from "esbuild";
 import { cpSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { join, relative } from "node:path";
 import { zipSync } from "fflate";
+import { nodeStubs } from "./node-stubs.mjs";
 
 const out = "dist";
+
 rmSync(out, { recursive: true, force: true });
 mkdirSync(join(out, "fonts"), { recursive: true });
 
@@ -20,8 +22,9 @@ await build({
   jsx: "automatic",
   jsxImportSource: "preact",
   define: { "process.env.NODE_ENV": '"production"' },
-  // Le librerie non devono mai usare moduli Node nel browser.
-  external: ["fs", "path", "crypto", "worker_threads", "url"],
+  // Alcune librerie (kdbxweb, libsodium) chiedono moduli di Node all'avvio
+  // ma nel browser usano WebCrypto: li sostituiamo con moduli vuoti.
+  plugins: [nodeStubs],
   logLevel: "warning",
 });
 

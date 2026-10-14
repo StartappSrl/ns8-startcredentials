@@ -7,7 +7,8 @@
   "scripts": {
     "build": "tsc --noEmit -p . && node build.mjs",
     "typecheck": "tsc --noEmit -p .",
-    "test:ui": "esbuild src/app.tsx --bundle --platform=node --format=cjs --target=node22 --jsx=automatic --jsx-import-source=preact --outfile=test-build/app.cjs --log-level=warning && node test/ui-smoke.mjs"
+    "test:ui": "esbuild src/app.tsx --bundle --platform=node --format=cjs --target=node22 --jsx=automatic --jsx-import-source=preact --outfile=test-build/app.cjs --log-level=warning && node test/ui-smoke.mjs",
+    "test:import": "node test/import-browser.mjs"
   },
   "dependencies": {
     "@fontsource/jetbrains-mono": "5.1.1",
