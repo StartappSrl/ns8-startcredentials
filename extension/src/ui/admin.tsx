@@ -393,6 +393,7 @@ export function Import({ vault, containers, onChanged }: { vault: Vault; contain
   const [source, setSource] = useState<(typeof SOURCES)[number]["id"]>("passbolt");
   const [file, setFile] = useState<File | null>(null);
   const [kdbxPw, setKdbxPw] = useState("");
+  const [keyFile, setKeyFile] = useState<File | null>(null);
   const [preview, setPreview] = useState<ImportResult | null>(null);
   const [progress, setProgress] = useState<string | null>(null);
   const [done, setDone] = useState<number | null>(null);
@@ -404,7 +405,7 @@ export function Import({ vault, containers, onChanged }: { vault: Vault; contain
     const name = file.name.toLowerCase();
     let r: ImportResult;
     if (source === "startcredentials") r = await importStartCredentials(await file.text(), kdbxPw);
-    else if (name.endsWith(".kdbx")) r = await importKeePass(await file.arrayBuffer(), kdbxPw);
+    else if (name.endsWith(".kdbx")) r = await importKeePass(await file.arrayBuffer(), kdbxPw, keyFile ? await keyFile.arrayBuffer() : undefined);
     else if (name.endsWith(".1pux")) r = import1Password(new Uint8Array(await file.arrayBuffer()));
     else if (name.endsWith(".json")) r = importBitwarden(await file.text());
     else r = importCsv(await file.text(), source);
@@ -441,8 +442,13 @@ export function Import({ vault, containers, onChanged }: { vault: Vault; contain
           <input class="input" type="file" accept={SOURCES.find((s) => s.id === source)!.accept} onChange={(e) => { setFile(e.currentTarget.files?.[0] ?? null); setPreview(null); }} />
         </label>
         {(isKdbx || source === "startcredentials") && (
-          <label class="field">{source === "startcredentials" ? "Passphrase dell'export" : "Password del file KeePass"}
+          <label class="field">{source === "startcredentials" ? "Passphrase dell'export" : "Password del file KeePass (lascia vuoto se l'export non ne ha)"}
             <input class="input" type="password" value={kdbxPw} onInput={(e) => setKdbxPw(e.currentTarget.value)} />
+          </label>
+        )}
+        {isKdbx && (
+          <label class="field">File chiave (facoltativo, se usato nell'export)
+            <input class="input" type="file" onChange={(e) => { setKeyFile(e.currentTarget.files?.[0] ?? null); setPreview(null); }} />
           </label>
         )}
         <label class="field">Importa nel cliente

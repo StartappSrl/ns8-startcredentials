@@ -245,12 +245,24 @@ export async function importKeePass(data: ArrayBuffer, password: string, keyFile
     });
     return out.buffer.slice(out.byteOffset, out.byteOffset + out.byteLength) as ArrayBuffer;
   });
-  const creds = new kdbxweb.Credentials(kdbxweb.ProtectedValue.fromString(password), keyFile ?? null);
-  let db: InstanceType<typeof kdbxweb.Kdbx>;
-  try {
-    db = await kdbxweb.Kdbx.load(data, creds);
-  } catch {
-    throw new Error("Impossibile aprire il file KeePass: password o file chiave errati");
+  // In KDBX "nessuna password" e "password vuota" sono chiavi diverse: un export
+  // senza password (es. da Passbolt) si apre solo con la prima. Con il campo
+  // vuoto proviamo entrambe.
+  const candidates = password ? [kdbxweb.ProtectedValue.fromString(password)] : [null, kdbxweb.ProtectedValue.fromString("")];
+  let db: InstanceType<typeof kdbxweb.Kdbx> | undefined;
+  for (const pw of candidates) {
+    try {
+      db = await kdbxweb.Kdbx.load(data, new kdbxweb.Credentials(pw, keyFile ?? null));
+      break;
+    } catch (e) {
+      const code = (e as { code?: string }).code;
+      if (code && code !== "InvalidKey") throw new Error(`File KeePass non valido o non supportato (${code})`);
+    }
+  }
+  if (!db) {
+    throw new Error(password || keyFile
+      ? "Impossibile aprire il file KeePass: password o file chiave errati"
+      : "Il file KeePass è protetto: inserisci la password o il file chiave usati nell'export");
   }
   const tree = new FolderTree();
   const res: ImportResult = { source: "keepass", folders: [], items: [], skipped: [] };

@@ -66,6 +66,24 @@ assert.equal(kp.items.find((i) => i.data.name === "Nota senza password").data.ty
 await assert.rejects(lib.importKeePass(file, "password sbagliata"), /password o file chiave errati/);
 console.log("✓ KeePass KDBX 4 (Argon2d): cartelle annidate, OTP, campi riservati, cestino escluso");
 
+async function kdbxWith(creds) {
+  const d = kdbxweb.Kdbx.create(creds, "Passbolt");
+  d.createEntry(d.getDefaultGroup()).fields.set("Title", "Da Passbolt");
+  return d.save();
+}
+// Export senza password (come Passbolt quando non se ne imposta una): campo vuoto.
+const noPw = await kdbxWith(new kdbxweb.Credentials(null));
+assert.equal((await lib.importKeePass(noPw, "")).items[0].data.name, "Da Passbolt");
+// Export con password vuota: anche questo con il campo vuoto.
+const emptyPw = await kdbxWith(new kdbxweb.Credentials(kdbxweb.ProtectedValue.fromString("")));
+assert.equal((await lib.importKeePass(emptyPw, "")).items.length, 1);
+// Export protetto da file chiave, senza password.
+const keyFile = await kdbxweb.Credentials.createRandomKeyFile(2);
+const withKey = await kdbxWith(new kdbxweb.Credentials(null, keyFile));
+assert.equal((await lib.importKeePass(withKey, "", keyFile.buffer.slice(keyFile.byteOffset, keyFile.byteOffset + keyFile.byteLength))).items.length, 1);
+await assert.rejects(lib.importKeePass(withKey, ""), /protetto: inserisci la password o il file chiave/);
+console.log("✓ KeePass senza password, con password vuota e con file chiave");
+
 // 3. CSV in formato Passbolt (KeePass CSV) e LastPass.
 const pb = lib.importCsv('"Group","Title","Username","Password","URL","Notes","TOTP"\n"Clienti/Rossi","PEC","rossi@pec.it","p1","https://pec.it","","GEZDGNBVGY3TQOJQ"\n', "passbolt");
 assert.equal(pb.items[0].data.password, "p1");

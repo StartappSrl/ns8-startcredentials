@@ -1,6 +1,9 @@
 #!/bin/bash
 
 #
+# Copyright (C) 2026 StartCredentials
+# SPDX-License-Identifier: GPL-3.0-or-later
+#
 # Dopo update-module: ricarica le unità systemd aggiornate e riavvia il pod,
 # così app e database ripartono con le immagini nuove. Le migrazioni del
 # database vengono applicate dall'app all'avvio.
