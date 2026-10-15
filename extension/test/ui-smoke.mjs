@@ -73,6 +73,14 @@ async function waitFor(fn, what, ms = 30000) {
     await sleep(50);
   }
 }
+async function waitAsync(fn, what, ms = 30000) {
+  const t0 = Date.now();
+  for (;;) {
+    if (await fn().catch(() => false)) return;
+    if (Date.now() - t0 > ms) throw new Error(`Timeout in attesa di: ${what}`);
+    await sleep(100);
+  }
+}
 const waitText = (s, ms) => waitFor(() => text().includes(s), `testo «${s}»`, ms);
 const byLabel = (label) => {
   for (const l of w.document.querySelectorAll("label")) {
@@ -120,6 +128,8 @@ try {
   require("../test-build/app.cjs");
 
   await waitText("Collega il server");
+  assert.equal(w.document.querySelector(".brand-logo")?.getAttribute("src"), "brand/startapp-logo.png");
+  step("logo StartApp nella schermata iniziale");
   type("Collegamento di invito o indirizzo", serverUrl);
   await click("Continua");
   await waitText("Crea l'amministratore");
@@ -238,17 +248,48 @@ try {
   type("Permesso", "write");
   await waitText("Impronta della chiave di Laura Bassi");
   [...w.document.querySelectorAll(".dialog button")].find((b) => b.textContent === "Condividi").dispatchEvent(new w.MouseEvent("click", { bubbles: true }));
-  await waitText("Accesso concesso");
+  await waitAsync(async () => (await laura.containers()).some((c) => c.meta.name === "Studio Legale Moretti"), "accesso di Laura");
   const lauraClients = await laura.containers();
   assert.ok(lauraClients.some((c) => c.meta.name === "Studio Legale Moretti" && c.permission === "write"));
   step("condivisione dal dialogo: Laura vede il cliente con permesso di modifica");
 
   await click("Rimuovi");
   await click("Rimuovi e ruota la chiave");
-  await waitText("Accesso rimosso e chiave ruotata");
+  await waitAsync(async () => !(await laura.containers()).some((c) => c.meta.name === "Studio Legale Moretti"), "revoca di Laura");
   assert.ok(!(await laura.containers()).some((c) => c.meta.name === "Studio Legale Moretti"));
   await click("Chiudi");
   step("revoca con rotazione della chiave dal dialogo");
+
+  // Gruppi: creazione, membro, condivisione del cliente con il gruppo.
+  await nav("#/clienti");
+  await nav("#/admin/gruppi");
+  await waitText("Nessun gruppo");
+  await click("Nuovo gruppo");
+  type("Nome del gruppo", "Tecnici");
+  await click("Crea gruppo");
+  await waitText("Gestisci");
+  await click("Gestisci");
+  await waitFor(() => [...(byLabel("Aggiungi un collega")?.options ?? [])].some((o) => o.value === reg.userId), "Laura tra i candidati");
+  type("Aggiungi un collega", reg.userId);
+  await click("Aggiungi");
+  await waitAsync(async () => (await laura.groups()).some((g) => g.name === "Tecnici" && g.myRole === "member"), "Laura nel gruppo");
+  await click("Fatto");
+  await nav("#/clienti");
+  await waitText("Studio Legale Moretti");
+  [...w.document.querySelectorAll(".client")][0].dispatchEvent(new w.MouseEvent("click", { bubbles: true }));
+  await waitText("Condividi");
+  await click("Condividi");
+  const groupOpt = await waitFor(() => [...(byLabel("Condividi con un gruppo")?.options ?? [])].find((o) => o.value), "gruppo tra le scelte");
+  type("Condividi con un gruppo", groupOpt.value);
+  type("Permesso del gruppo", "read");
+  await click("Condividi con il gruppo");
+  // Si verifica il risultato (il gruppo nell'elenco), non il messaggio a comparsa che dura pochi secondi.
+  await waitText("Gruppo Tecnici");
+  const viaGroup = (await laura.containers()).find((c) => c.meta.name === "Studio Legale Moretti");
+  assert.deepEqual([...viaGroup.viaGroups], ["Tecnici"]);
+  assert.equal(viaGroup.permission, "read");
+  await click("Chiudi");
+  step("gruppo creato, Laura aggiunta, cliente condiviso con il gruppo");
 
   await nav("#/clienti");
   await nav("#/admin/utenti");

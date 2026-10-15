@@ -36,7 +36,7 @@ jobs:
       - name: Backend end-to-end
         run: npm test -w app
       - name: Estensione (build e test di fumo dell'interfaccia)
-        run: npm run build -w extension && npm run test:ui -w extension && npm run test:import -w extension
+        run: npm run build -w extension && npm run test:ui -w extension && npm run test:import -w extension && npm run test:inline -w extension
       - uses: actions/upload-artifact@v4
         with:
           name: startcredentials-extension

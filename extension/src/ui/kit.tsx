@@ -4,6 +4,17 @@ import qrcode from "qrcode-generator";
 import { Vault } from "@startcredentials/client";
 import { copySecret, errorText, touch } from "../shared";
 
+// ------------------------------------------------------------------ marchio
+
+export function Brand({ small }: { small?: boolean }) {
+  return (
+    <div class={`brand${small ? " small" : ""}`}>
+      <img class="brand-logo" src="brand/startapp-logo.png" alt="StartApp" />
+      <span class="brand-name">Credentials</span>
+    </div>
+  );
+}
+
 // ------------------------------------------------------------------ notifiche
 
 const ToastCtx = createContext<(msg: string) => void>(() => undefined);

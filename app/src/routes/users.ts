@@ -235,6 +235,15 @@ export async function userRoutes(app: FastifyInstance, ctx: Ctx) {
         `UPDATE containers SET rotation_required = true
           WHERE kind <> 'personal' AND id IN (SELECT container_id FROM container_keys WHERE user_id = $1) RETURNING id`, [id]);
       await c.query("DELETE FROM container_keys k USING containers ct WHERE k.container_id = ct.id AND ct.kind <> 'personal' AND k.user_id = $1", [id]);
+      // Gruppi: la sua copia della chiave del gruppo sparisce; gruppo e clienti condivisi col gruppo vanno ruotati.
+      const groups = await c.query("WITH d AS (DELETE FROM group_members WHERE user_id = $1 RETURNING group_id) SELECT DISTINCT group_id FROM d", [id]);
+      const groupIds = [...new Set(groups.rows.map((g) => g.group_id as string))];
+      if (groupIds.length) {
+        await c.query("UPDATE groups SET rotation_required = true WHERE id = ANY($1::uuid[])", [groupIds]);
+        await c.query(
+          `UPDATE containers SET rotation_required = true WHERE id IN (
+             SELECT gk.container_id FROM container_group_keys gk WHERE gk.group_id = ANY($1::uuid[]))`, [groupIds]);
+      }
       await c.query("UPDATE users SET status = 'suspended', role = 'user' WHERE id = $1", [id]);
       await c.query("DELETE FROM sessions WHERE user_id = $1", [id]);
       await audit(c, { actorId: a.id, action: "user.offboarded", targetType: "user", targetId: id, ip: req.ip,

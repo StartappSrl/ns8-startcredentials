@@ -15,7 +15,7 @@ await build({
   outdir: out,
   bundle: true,
   format: "esm",
-  target: "chrome116",
+  target: "chrome127",
   minify: true,
   sourcemap: false,
   legalComments: "external",
@@ -26,6 +26,12 @@ await build({
   // ma nel browser usano WebCrypto: li sostituiamo con moduli vuoti.
   plugins: [nodeStubs],
   logLevel: "warning",
+});
+
+// Lo script delle pagine non può essere un modulo: build separata in IIFE.
+await build({
+  entryPoints: { inline: "src/inline.ts" }, outdir: out, bundle: true, format: "iife",
+  target: "chrome127", minify: true, logLevel: "warning",
 });
 
 cpSync("static", out, { recursive: true });

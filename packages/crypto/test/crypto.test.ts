@@ -158,3 +158,26 @@ test("TOTP: parsing URI otpauth e Base32", async () => {
   assert.deepEqual(base32Decode("gezd gnbv"), base32Decode("GEZDGNBV"));
   assert.throws(() => parseOtpauthUri("otpauth://hotp/x?secret=GEZD"), isCode("invalid_input"));
 });
+
+test("gruppi: certificazione, consegna ai membri, contenitore condiviso col gruppo", async () => {
+  const { generateGroupKeys, certifyGroup, verifyGroupCert, grantGroupMembership, openGroupMembership, grantContainerToGroup, openGroupContainerKey } = await import("../src/index.js");
+  const org = generateUserKeys();
+  const admin = { userId: "admin", keys: generateUserKeys() };
+  const sara = { userId: "sara", keys: generateUserKeys() };
+  const g = generateGroupKeys();
+  const cert = certifyGroup("g1", 1, g.boxPublic, org.signPrivate);
+  verifyGroupCert("g1", 1, g.boxPublic, cert, org.publicKeys.sign);
+  assert.throws(() => verifyGroupCert("g1", 1, generateGroupKeys().boxPublic, cert, org.publicKeys.sign), isCode("invalid_signature"));
+
+  const m = grantGroupMembership({ groupId: "g1", keyVersion: 1, groupPrivate: g.boxPrivate, userId: "sara", userBoxPublic: sara.keys.publicKeys.box, role: "member", grantor: admin });
+  const priv = openGroupMembership(m, sara, admin.keys.publicKeys.sign, g.boxPublic);
+  assert.deepEqual(priv, g.boxPrivate);
+  assert.throws(() => openGroupMembership({ ...m, role: "manager" }, sara, admin.keys.publicKeys.sign, g.boxPublic), isCode("invalid_signature"));
+  // Il server non può far accettare una chiave di gruppo diversa da quella certificata.
+  assert.throws(() => openGroupMembership(m, sara, admin.keys.publicKeys.sign, generateGroupKeys().boxPublic), isCode("invalid_signature"));
+
+  const ck = newContainerKey();
+  const gg = grantContainerToGroup({ containerKey: ck, containerId: "c1", keyVersion: 3, groupId: "g1", groupKeyVersion: 1, groupBoxPublic: g.boxPublic, permission: "read", grantor: admin });
+  assert.deepEqual(openGroupContainerKey(gg, g.boxPublic, priv, admin.keys.publicKeys.sign), ck);
+  assert.throws(() => openGroupContainerKey({ ...gg, permission: "manage" }, g.boxPublic, priv, admin.keys.publicKeys.sign), isCode("invalid_signature"));
+});

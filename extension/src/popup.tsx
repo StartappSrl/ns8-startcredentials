@@ -3,7 +3,7 @@ import { useEffect, useState } from "preact/hooks";
 import { Container, generatePassword, Item, normalizeHost, ready, Vault } from "@startcredentials/client";
 import { api, currentVault, getSettings, hasToken, lock } from "./shared";
 import { fillTab } from "./fill";
-import { CopyButton, ErrorNote, OtpCode, ToastHost, useAction, useToast } from "./ui/kit";
+import { Brand, CopyButton, ErrorNote, OtpCode, ToastHost, useAction, useToast } from "./ui/kit";
 import { unlockWith } from "./ui/auth";
 
 const openApp = (hash = "") => chrome.tabs.create({ url: chrome.runtime.getURL(`app.html${hash}`) }).then(() => window.close());
@@ -30,7 +30,7 @@ function Popup() {
   if (state === "setup" || state === "app") {
     return (
       <div class="pop-body" style="padding:24px;gap:16px">
-        <div class="brand"><img src="icons/128.png" alt="" />StartCredentials</div>
+        <Brand small />
         <p class="muted">{state === "setup" ? "Collega il server della tua azienda e accedi dall'applicazione." : "Completa l'accesso nell'applicazione."}</p>
         <button class="btn primary" onClick={() => openApp()}>Apri StartCredentials</button>
       </div>
@@ -45,7 +45,7 @@ function PopupUnlock({ onDone }: { onDone: (v: Vault) => void }) {
   const { busy, error, run } = useAction();
   return (
     <form class="pop-body" style="padding:24px;gap:14px" onSubmit={(e) => { e.preventDefault(); run(async () => onDone(await unlockWith(pw))); }}>
-      <div class="brand"><img src="icons/128.png" alt="" />StartCredentials</div>
+      <Brand small />
       <p class="muted">Cassaforte bloccata</p>
       <input class="input" type="password" aria-label="Master password" placeholder="Master password" autoFocus required value={pw} onInput={(e) => setPw(e.currentTarget.value)} />
       <ErrorNote error={error} />
@@ -160,4 +160,5 @@ function Unlocked({ vault }: { vault: Vault }) {
   );
 }
 
+chrome.action.setBadgeText({ text: "" }).catch(() => undefined);
 render(<ToastHost><Popup /></ToastHost>, document.getElementById("root")!);

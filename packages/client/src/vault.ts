@@ -12,6 +12,8 @@ import {
   openItemKey, openSealed, parseOtpauthUri, parsePrivateKeys, Permission, PublicKeys, reencryptItemData,
   rewrapItemKey, seal, sealToPublicKey, serializePrivateKeys, toB64, unwrapPrivateKeys, UserKeyPair,
   verifyUserCertification, wipe, wrapPrivateKeys,
+  certifyGroup, generateGroupKeys, grantContainerToGroup, grantGroupMembership, GroupContainerGrant, GroupMemberGrant,
+  GroupRole, openGroupContainerKey, openGroupMembership, verifyGroupCert,
 } from "@startcredentials/crypto";
 import { Api, ApiError } from "./api.js";
 
@@ -38,6 +40,14 @@ export interface Container {
   id: string; kind: "client" | "personal" | "org"; keyVersion: number; permission: Permission;
   meta: ContainerMeta; members: number; items: number; totpItems: number; updatedAt: string; grantedBy: string;
   rotationRequired: boolean;
+  /** Numero di gruppi con cui è condiviso. */
+  groups: number;
+  /** Gruppi tramite cui l'utente vi accede (vuoto se l'accesso è diretto). */
+  viaGroups: string[];
+}
+export interface Group {
+  id: string; name: string; keyVersion: number; boxPublic: string; certification: string;
+  rotationRequired: boolean; members: number; containers: number; myRole: GroupRole | null; verified: boolean;
 }
 export interface Attachment { id: string; name: string; mime: string; size: number; chunkCount: number; header: string; fkEnc: string }
 export interface Item {
@@ -58,7 +68,9 @@ export type SessionState = "mfa_setup" | "mfa_pending" | "active";
 
 interface RawContainer {
   id: string; kind: Container["kind"]; metaKeyEnc: string; metaEnc: string; keyVersion: number; updatedAt: string;
-  members: number; items: number; totpItems: number; grant: KeyGrant; grantorSignPublic: string; rotationRequired: boolean;
+  members: number; groups: number; items: number; totpItems: number; rotationRequired: boolean; permission: Permission;
+  grant: KeyGrant | null; grantorSignPublic: string | null;
+  groupAccess: { grant: GroupContainerGrant; group: { id: string; name: string; keyVersion: number; boxPublic: string; certification: string }; membership: GroupMemberGrant }[];
 }
 interface RawItem {
   id: string; folderId: string | null; type: ItemData["type"]; ikEnc: string; ikKeyVersion: number; dataEnc: string;
@@ -296,6 +308,8 @@ export class Vault {
     this.cks.clear();
     wipe(this.orgSignPrivate);
     this.orgSignPrivate = undefined;
+    for (const k of this.groupKeys.values()) wipe(k);
+    this.groupKeys.clear();
   }
 
   get myFingerprint(): string {
@@ -347,27 +361,56 @@ export class Vault {
 
   // ---------------------------------------------------------------- contenitori
 
+  private groupKeys = new Map<string, Uint8Array>();
+
+  /** Verifica certificazione del gruppo e firma della consegna, poi apre la chiave privata del gruppo. */
+  private async openGroup(group: { id: string; keyVersion: number; boxPublic: string; certification: string }, membership: GroupMemberGrant): Promise<Uint8Array> {
+    const cacheKey = `${group.id}:${group.keyVersion}`;
+    const cached = this.groupKeys.get(cacheKey);
+    if (cached) return cached;
+    if (!this.me.org) throw new SecurityError("Organizzazione non inizializzata");
+    try {
+      verifyGroupCert(group.id, group.keyVersion, group.boxPublic, group.certification, this.me.org.signPublic);
+    } catch {
+      throw new SecurityError(`La chiave del gruppo non è certificata dall'organizzazione`);
+    }
+    const signer = await this.signerKey(membership.grantedBy);
+    const priv = openGroupMembership(membership, this.self, signer, group.boxPublic);
+    this.groupKeys.set(cacheKey, priv);
+    return priv;
+  }
+
   private async openRaw(r: RawContainer): Promise<Container> {
     const cached = this.cks.get(r.id);
     if (!cached || cached.version !== r.keyVersion) {
-      const signer = await this.signerKey(r.grant.grantedBy);
-      if (signer !== r.grantorSignPublic) throw new SecurityError("Chiave del concedente non corrispondente");
-      const ck = openContainerKey(r.grant, this.self, signer);
+      let ck: Uint8Array;
+      if (r.grant) {
+        const signer = await this.signerKey(r.grant.grantedBy);
+        if (r.grantorSignPublic && signer !== r.grantorSignPublic) throw new SecurityError("Chiave del concedente non corrispondente");
+        ck = openContainerKey(r.grant, this.self, signer);
+      } else {
+        const via = r.groupAccess[0];
+        if (!via) throw new SecurityError("Nessuna via di accesso al contenitore");
+        const groupPrivate = await this.openGroup(via.group, via.membership);
+        ck = openGroupContainerKey(via.grant, via.group.boxPublic, groupPrivate, await this.signerKey(via.grant.grantedBy));
+      }
       const metaKey = open(ck, r.metaKeyEnc, ctxs.metaKey(r.id));
       if (cached) {
         wipe(cached.ck);
         wipe(cached.metaKey);
       }
-      this.cks.set(r.id, { version: r.keyVersion, ck, metaKey, permission: r.grant.permission, kind: r.kind });
+      this.cks.set(r.id, { version: r.keyVersion, ck, metaKey, permission: r.permission, kind: r.kind });
     } else {
-      cached.permission = r.grant.permission;
+      cached.permission = r.permission;
     }
     const k = this.cks.get(r.id)!;
     return {
-      id: r.id, kind: r.kind, keyVersion: r.keyVersion, permission: r.grant.permission,
+      id: r.id, kind: r.kind, keyVersion: r.keyVersion, permission: r.permission,
       meta: unjson<ContainerMeta>(open(k.metaKey, r.metaEnc, ctxs.meta(r.id))),
-      members: r.members, items: r.items, totpItems: r.totpItems, updatedAt: r.updatedAt, grantedBy: r.grant.grantedBy,
-      rotationRequired: !!r.rotationRequired,
+      members: r.members, items: r.items, totpItems: r.totpItems, updatedAt: r.updatedAt,
+      grantedBy: r.grant?.grantedBy ?? r.groupAccess[0]?.grant.grantedBy ?? "",
+      rotationRequired: !!r.rotationRequired, groups: r.groups,
+      viaGroups: r.grant ? [] : r.groupAccess.map((g) => g.group.name),
     };
   }
 
@@ -471,8 +514,13 @@ export class Vault {
   }
 
   async items(containerId: string, opts: { trash?: boolean } = {}): Promise<Item[]> {
-    const k = await this.key(containerId);
+    let k = await this.key(containerId);
     const raw = await this.api.get<RawItem[]>(`/containers/${containerId}/items${opts.trash ? "?trash=1" : ""}`);
+    // Un altro gestore può aver ruotato la chiave dopo che l'abbiamo aperta: in quel caso la ricarichiamo.
+    if (raw.some((r) => r.ikKeyVersion !== k.version)) {
+      this.forget(containerId);
+      k = await this.key(containerId);
+    }
     return raw.map((r) => {
       const data = decryptItem(k.ck, containerId, r.id, { ikEnc: r.ikEnc, dataEnc: r.dataEnc });
       const ik = openItemKey(k.ck, containerId, r.id, r.ikEnc);
@@ -662,11 +710,25 @@ export class Vault {
       if (!pub) throw new SecurityError(`Chiave non certificata per ${m.displayName}: impossibile ruotare`);
       return grantContainerKey({ containerKey: ck, containerId, keyVersion: newVersion, recipientId: m.userId, recipientPublic: pub, permission: m.permission, grantor: this.self });
     });
+    const shared = await this.containerGroups(containerId);
+    const groupGrants = [];
+    if (shared.length) {
+      const all = await this.groups();
+      for (const sg of shared) {
+        const g = all.find((x) => x.id === sg.groupId);
+        if (!g?.verified) throw new SecurityError(`Il gruppo ${sg.name} non ha una chiave certificata`);
+        if (g.rotationRequired) throw new SecurityError(`La chiave del gruppo ${g.name} deve prima essere ruotata da un amministratore del gruppo`);
+        groupGrants.push(grantContainerToGroup({
+          containerKey: ck, containerId, keyVersion: newVersion, groupId: g.id, groupKeyVersion: g.keyVersion,
+          groupBoxPublic: g.boxPublic, permission: sg.permission, grantor: this.self,
+        }));
+      }
+    }
     const items = [...live, ...trash].map((i) => ({ id: i.id, ikEnc: rewrapItemKey(old.ck, ck, newVersion, containerId, i.id, i.ikEnc) }));
     await this.api.post(`/containers/${containerId}/rotate`, {
       newKeyVersion: newVersion,
       metaKeyEnc: seal(ck, old.metaKey, ctxs.metaKey(containerId), `ck:${containerId}:${newVersion}`),
-      grants, items,
+      grants, groupGrants, items,
     });
     wipe(old.ck);
     this.cks.set(containerId, { ...old, version: newVersion, ck });
@@ -680,6 +742,17 @@ export class Vault {
   async completePendingRotations(): Promise<{ done: string[]; failed: { name: string; error: string }[] }> {
     const done: string[] = [];
     const failed: { name: string; error: string }[] = [];
+    if (this.me.role === "admin") {
+      for (const g of await this.groups()) {
+        if (!g.rotationRequired || g.myRole !== "manager") continue;
+        try {
+          await this.rotateGroup(g.id);
+          done.push(`gruppo ${g.name}`);
+        } catch (e) {
+          failed.push({ name: `gruppo ${g.name}`, error: (e as Error).message });
+        }
+      }
+    }
     for (const c of await this.containers()) {
       if (!c.rotationRequired || c.permission !== "manage") continue;
       try {
@@ -766,6 +839,144 @@ export class Vault {
     } finally {
       wipe(key);
     }
+  }
+
+  // ---------------------------------------------------------------- gruppi
+
+  async groups(): Promise<Group[]> {
+    const raw = await this.api.get<Omit<Group, "verified">[]>("/groups");
+    return raw.map((g) => {
+      let verified = false;
+      if (this.me.org) {
+        try {
+          verifyGroupCert(g.id, g.keyVersion, g.boxPublic, g.certification, this.me.org.signPublic);
+          verified = true;
+        } catch {
+          verified = false;
+        }
+      }
+      return { ...g, verified };
+    });
+  }
+
+  async groupMembers(groupId: string): Promise<{ userId: string; displayName: string; email: string; role: GroupRole }[]> {
+    return this.api.get(`/groups/${groupId}/members`);
+  }
+
+  /** Crea un gruppo (solo amministratori): nuova coppia di chiavi certificata dall'organizzazione. */
+  async createGroup(name: string): Promise<string> {
+    const id = uuid();
+    const keys = generateGroupKeys();
+    try {
+      await this.api.post("/groups", {
+        id, name, boxPublic: keys.boxPublic,
+        certification: certifyGroup(id, 1, keys.boxPublic, await this.orgKey()),
+        membership: grantGroupMembership({ groupId: id, keyVersion: 1, groupPrivate: keys.boxPrivate, userId: this.me.id, userBoxPublic: this.keys.publicKeys.box, role: "manager", grantor: this.self }),
+      });
+      return id;
+    } finally {
+      wipe(keys.boxPrivate);
+    }
+  }
+
+  async renameGroup(groupId: string, name: string): Promise<void> {
+    await this.api.patch(`/groups/${groupId}`, { name });
+  }
+
+  async deleteGroup(groupId: string): Promise<void> {
+    await this.api.del(`/groups/${groupId}`);
+    await this.completePendingRotations();
+  }
+
+  private async myGroupMaterial(groupId: string) {
+    const m = await this.api.get<{
+      group: { id: string; name: string; keyVersion: number; boxPublic: string; certification: string };
+      members: { userId: string; role: GroupRole }[];
+      membership: GroupMemberGrant;
+      containerGrants: GroupContainerGrant[];
+    }>(`/groups/${groupId}/rotation`);
+    return { ...m, groupPrivate: await this.openGroup(m.group, m.membership) };
+  }
+
+  /** Aggiunge un membro (o ne cambia il ruolo) consegnandogli la chiave del gruppo. */
+  async setGroupMember(groupId: string, userId: string, role: GroupRole = "member"): Promise<void> {
+    const recipient = (await this.directory(true)).find((u) => u.id === userId);
+    if (!recipient?.verified) throw new SecurityError("La chiave del destinatario non è certificata");
+    if (recipient.status !== "active") throw new SecurityError("Il destinatario è sospeso");
+    const m = await this.myGroupMaterial(groupId);
+    const grant = grantGroupMembership({
+      groupId, keyVersion: m.group.keyVersion, groupPrivate: m.groupPrivate, userId, userBoxPublic: recipient.publicKeys.box, role, grantor: this.self,
+    });
+    await this.api.put(`/groups/${groupId}/members`, { grant });
+  }
+
+  /** Toglie un membro e ruota subito la chiave del gruppo e quella dei suoi clienti, dove possibile. */
+  async removeGroupMember(groupId: string, userId: string): Promise<{ done: string[]; failed: { name: string; error: string }[] }> {
+    await this.api.del(`/groups/${groupId}/members/${userId}`);
+    return this.completePendingRotations();
+  }
+
+  /** Nuova coppia di chiavi del gruppo, consegnata ai membri rimasti; i clienti condivisi vengono ricondivisi. */
+  async rotateGroup(groupId: string): Promise<number> {
+    const m = await this.myGroupMaterial(groupId);
+    const dir = await this.directory(true);
+    const newVersion = m.group.keyVersion + 1;
+    const keys = generateGroupKeys();
+    try {
+      const members = m.members.map((x) => {
+        const pub = x.userId === this.me.id ? this.keys.publicKeys.box : dir.find((u) => u.id === x.userId && u.verified)?.publicKeys.box;
+        if (!pub) throw new SecurityError("Un membro del gruppo non ha una chiave certificata");
+        return grantGroupMembership({ groupId, keyVersion: newVersion, groupPrivate: keys.boxPrivate, userId: x.userId, userBoxPublic: pub, role: x.role, grantor: this.self });
+      });
+      const containerGrants = [];
+      for (const g of m.containerGrants) {
+        const ck = openGroupContainerKey(g, m.group.boxPublic, m.groupPrivate, await this.signerKey(g.grantedBy));
+        containerGrants.push(grantContainerToGroup({
+          containerKey: ck, containerId: g.containerId, keyVersion: g.keyVersion, groupId, groupKeyVersion: newVersion,
+          groupBoxPublic: keys.boxPublic, permission: g.permission, grantor: this.self,
+        }));
+        wipe(ck);
+      }
+      await this.api.post(`/groups/${groupId}/rotate`, {
+        newKeyVersion: newVersion, boxPublic: keys.boxPublic,
+        certification: certifyGroup(groupId, newVersion, keys.boxPublic, await this.orgKey()),
+        members, containerGrants,
+      });
+      return newVersion;
+    } finally {
+      wipe(keys.boxPrivate);
+    }
+  }
+
+  async containerGroups(containerId: string): Promise<{ groupId: string; name: string; permission: Permission; members: number }[]> {
+    return this.api.get(`/containers/${containerId}/groups`);
+  }
+
+  /** Condivide un cliente con un gruppo: la chiave del cliente viene cifrata una volta per la chiave pubblica del gruppo. */
+  async shareWithGroup(containerId: string, groupId: string, permission: Permission): Promise<void> {
+    const k = await this.key(containerId);
+    const g = (await this.groups()).find((x) => x.id === groupId);
+    if (!g?.verified) throw new SecurityError("Il gruppo non ha una chiave certificata dall'organizzazione");
+    if (g.rotationRequired) throw new SecurityError("La chiave del gruppo deve prima essere ruotata da un amministratore del gruppo");
+    const grant = grantContainerToGroup({
+      containerKey: k.ck, containerId, keyVersion: k.version, groupId, groupKeyVersion: g.keyVersion,
+      groupBoxPublic: g.boxPublic, permission, grantor: this.self,
+    });
+    try {
+      await this.api.put(`/containers/${containerId}/groups`, { grant });
+    } catch (e) {
+      if (e instanceof ApiError && e.code === "stale_key_version") {
+        this.forget(containerId);
+        return this.shareWithGroup(containerId, groupId, permission);
+      }
+      throw e;
+    }
+  }
+
+  /** Toglie la condivisione con un gruppo e ruota la chiave del cliente. */
+  async unshareGroup(containerId: string, groupId: string): Promise<void> {
+    await this.api.del(`/containers/${containerId}/groups/${groupId}`);
+    await this.rotate(containerId);
   }
 
   // ---------------------------------------------------------------- autofill e OTP

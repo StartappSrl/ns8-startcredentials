@@ -357,6 +357,66 @@ describe("StartCredentials end-to-end", () => {
     assert.ok(h.missingOtp.some((e) => e.item.data.name === "Debole"));
   });
 
+  test("gruppi: accesso tramite gruppo, firma verificata, uscita dal gruppo con doppia rotazione", async () => {
+    const marco: Vault = state.marco;
+    const sara: Vault = state.sara;
+    // Nuovo collega, certificato.
+    const inv = await marco.invite("paolo@azienda.it", "Paolo Neri", "user");
+    const pa = api();
+    const reg = await register(pa, { token: inv.inviteToken, password: "paolo master password", kdf: FAST });
+    await onboard(pa, reg.userId);
+    const paolo = await Vault.unlock(pa, "paolo master password");
+    await marco.certifyUser(reg.userId, paolo.myFingerprint);
+
+    const gid = await marco.createGroup("Tecnici");
+    await marco.setGroupMember(gid, state.saraId, "member");
+    await marco.setGroupMember(gid, reg.userId, "member");
+    const g = (await sara.groups()).find((x) => x.id === gid)!;
+    assert.equal(g.verified, true);
+    assert.equal(g.members, 3);
+    assert.equal(g.myRole, "member");
+
+    const cid = await marco.createContainer({ name: "Cliente del gruppo" });
+    await marco.createItem(cid, { type: "login", name: "NAS", username: "admin", password: "nas-segreta", urls: ["https://nas.cliente.it"] });
+    await marco.shareWithGroup(cid, gid, "write");
+
+    const sc = (await sara.containers()).find((c) => c.id === cid)!;
+    assert.deepEqual(sc.viaGroups, ["Tecnici"]);
+    assert.equal(sc.permission, "write");
+    const [it] = await sara.items(cid);
+    assert.equal(it!.data.password, "nas-segreta");
+    await sara.updateItem(it!, { ...it!.data, password: "nas-nuova" });
+    assert.equal((await paolo.items(cid))[0]!.data.password, "nas-nuova");
+    assert.equal((await sara.lookup("https://nas.cliente.it/login")).length, 1);
+
+    // Un client manomesso non può alzare il permesso del gruppo: la firma non torna.
+    const row = (await db.query("SELECT * FROM container_group_keys WHERE container_id = $1", [cid])).rows[0];
+    await rejects(marco.api.put(`/containers/${cid}/groups`, { grant: {
+      containerId: cid, keyVersion: row.key_version, groupId: gid, groupKeyVersion: row.group_key_version, permission: "manage",
+      sealedKey: row.sealed_key, grantedBy: state.marcoId, signature: row.signature } }), "invalid_grant_signature");
+
+    // Paolo esce dal gruppo: ruotano la chiave del gruppo e quella del cliente.
+    const before = (await marco.containers()).find((c) => c.id === cid)!.keyVersion;
+    const r = await marco.removeGroupMember(gid, reg.userId);
+    assert.deepEqual(r.failed, []);
+    assert.ok(r.done.includes("gruppo Tecnici") && r.done.includes("Cliente del gruppo"));
+    assert.equal((await marco.groups()).find((x) => x.id === gid)!.keyVersion, 2);
+    assert.equal((await marco.containers()).find((c) => c.id === cid)!.keyVersion, before + 1);
+    await rejects(paolo.items(cid), "container_not_found");
+    assert.equal((await sara.items(cid))[0]!.data.password, "nas-nuova");
+
+    // Mentre la chiave del gruppo aspetta la rotazione, non si condivide nulla con il gruppo.
+    await marco.setGroupMember(gid, reg.userId, "member");
+    await marco.api.del(`/groups/${gid}/members/${reg.userId}`);
+    const other = await marco.createContainer({ name: "Altro cliente" });
+    await rejects(marco.shareWithGroup(other, gid, "read"), "security");
+    await marco.completePendingRotations();
+    await marco.shareWithGroup(other, gid, "read");
+    assert.ok((await sara.containers()).some((c) => c.id === other && c.permission === "read"));
+    // Solo gli amministratori gestiscono i gruppi.
+    await rejects(sara.createGroup("Abusivo"), "security");
+  });
+
   test("sospensione e registro di audit a prova di manomissione", async () => {
     const marco: Vault = state.marco;
     await marco.setUser(state.lauraId, { status: "suspended" });
@@ -364,7 +424,8 @@ describe("StartCredentials end-to-end", () => {
     await marco.setUser(state.lauraId, { status: "active" });
     const log = await marco.auditLog();
     for (const action of ["org.initialized", "user.key_certified", "container.key_rotated", "container.imported", "user.recovery_completed", "auth.login_failed",
-                          "auth.mfa_backup_used", "user.mfa_reset", "user.password_changed", "user.offboarded", "container.export"]) {
+                          "auth.mfa_backup_used", "user.mfa_reset", "user.password_changed", "user.offboarded", "container.export",
+                          "group.created", "group.member_set", "group.member_removed", "group.key_rotated", "container.group_set"]) {
       assert.ok(log.some((l) => l.action === action), `manca ${action}`);
     }
     assert.equal((await marco.verifyAudit()).ok, true);

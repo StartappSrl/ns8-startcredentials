@@ -61,10 +61,16 @@ Al ripristino il dump viene ricaricato automaticamente al primo avvio di Postgre
 ## Funzioni
 
 Contenitori cliente con cartelle, password, OTP, note e allegati; area
-personale; condivisione con permessi di lettura, modifica e gestione; revoca
-con rotazione delle chiavi; ricerca globale; rapporto sulla salute delle
+personale; condivisione con colleghi e **gruppi** (permessi di lettura, modifica
+e gestione); revoca con rotazione delle chiavi; icona di compilazione nei campi
+di accesso (facoltativa); ricerca globale; rapporto sulla salute delle
 password; import da Passbolt, KeePass, Bitwarden, 1Password, LastPass, Chrome/Edge
 e dall'export cifrato di StartCredentials; export cifrato; registro di audit.
+
+Gruppi: ogni gruppo ha una coppia di chiavi certificata dall'organizzazione;
+un cliente condiviso con un gruppo è visibile a tutti i suoi membri. Chi esce
+dal gruppo perde subito l'accesso; la chiave del gruppo e quelle dei clienti
+vengono ruotate. I gruppi sono gestiti dagli amministratori che ne fanno parte.
 
 Account: MFA obbligatoria con 10 codici di riserva, cambio della master
 password, recupero con 2 quote su 3. Amministrazione: inviti, certificazione
@@ -74,12 +80,14 @@ cliente al suo accesso successivo).
 
 ## Aggiornare un'installazione
 
+Pubblicate sempre con un **numero di versione**: con un tag nuovo NethServer
+scarica di sicuro le immagini, mentre con `latest` potrebbe riusare quelle già
+presenti sul server.
+
 ```
-git push
-export REPOBASE=ghcr.io/startappsrl IMAGETAG=latest
-bash build-images.sh
-# buildah login ghcr.io … ; buildah push … (vedi sopra)
-api-cli run update-module --data '{"module_url": "ghcr.io/startappsrl/startcredentials:latest", "instances": ["startcredentials1"], "force": true}'
+git tag 0.3.0 && git push origin 0.3.0      # GitHub Actions costruisce e pubblica :0.3.0 e :latest
+# oppure, a mano: IMAGETAG=0.3.0 bash build-images.sh e buildah push dei tag :0.3.0
+api-cli run update-module --data '{"module_url": "ghcr.io/startappsrl/startcredentials:0.3.0", "instances": ["startcredentials1"], "force": true}'
 ```
 
 Le migrazioni del database vengono applicate in automatico all'avvio dell'app.
@@ -90,18 +98,19 @@ Serve Node.js 22 e un PostgreSQL di test (`TEST_DATABASE_URL`, predefinito `post
 
 ```
 npm ci
-npm test -w packages/crypto          # 13 test del core crittografico
+npm test -w packages/crypto          # 14 test del core crittografico
 npm run build -w packages/client
-npm test -w app                      # 14 scenari end-to-end su server e database reali
+npm test -w app                      # 15 scenari end-to-end su server e database reali
 npm run build -w extension           # produce extension/startcredentials-extension.zip
-npm run test:ui -w extension         # 22 passaggi dell'interfaccia (jsdom + server reale)
+npm run test:ui -w extension         # 24 passaggi dell'interfaccia (jsdom + server reale)
 npm run test:import -w extension     # import con il pacchetto per browser (KeePass reale, CSV, 1Password)
+npm run test:inline -w extension     # icona nei campi di accesso
 ./build-images.sh                    # immagini del modulo e dell'applicazione (buildah)
 ```
 
 ## Stato
 
-Versione 0.2.0. Fasi 0, 1 e 2 implementate e testate; non ancora presenti:
-gruppi, icona di compilazione nei campi, app mobile. Prima dell'uso in produzione servono un
+Versione 0.3.0. Fasi 0, 1 e 2 implementate e testate; l'app mobile (fase 3) non
+è ancora iniziata. Prima dell'uso in produzione servono un
 penetration test esterno e una revisione indipendente della crittografia.
 L'app mobile (fase 3) userà `packages/crypto` e `packages/client`.

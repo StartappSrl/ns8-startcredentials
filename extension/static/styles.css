@@ -7,18 +7,19 @@
 
 :root {
   color-scheme: light;
-  --ground: #F7F8FB;
+  --ground: #F4F8FD;
   --surface: #FFFFFF;
-  --sunken: #F9FAFC;
-  --line: #E6E8F0;
-  --line-strong: #DCDFE8;
-  --ink: #0F1222;
-  --ink-2: #3F4559;
-  --muted: #5B6175;
-  --accent: #4F46E5;
-  --accent-ink: #3730A3;
-  --accent-soft: #EEEDFF;
-  --accent-line: #C7C4FB;
+  --sunken: #F7FAFE;
+  --line: #E1E9F3;
+  --line-strong: #CFDBEA;
+  --ink: #0B1B2E;
+  --ink-2: #33475E;
+  --muted: #536780;
+  /* Blu StartApp: #0068CF (contrasto 5,1:1 con il bianco) */
+  --accent: #0068CF;
+  --accent-ink: #00519F;
+  --accent-soft: #E8F2FC;
+  --accent-line: #B4D4F4;
   --warn-bg: #FBF3E6; --warn-line: #EBD3AE; --warn-ink: #5C3507;
   --danger: #B42318; --danger-bg: #FEF3F2;
   --ok: #027A48; --ok-bg: #ECFDF3;
@@ -29,10 +30,10 @@
 @media (prefers-color-scheme: dark) {
   :root {
     color-scheme: dark;
-    --ground: #0E1020; --surface: #161A2E; --sunken: #12152A;
-    --line: #262A42; --line-strong: #323756;
-    --ink: #ECEEF7; --ink-2: #C4C8DA; --muted: #9AA0B8;
-    --accent: #7C75FF; --accent-ink: #C9C6FF; --accent-soft: #23214A; --accent-line: #3C3A7A;
+    --ground: #08172A; --surface: #0F223A; --sunken: #0B1C31;
+    --line: #1E3654; --line-strong: #2A4669;
+    --ink: #EEF4FB; --ink-2: #C6D5E6; --muted: #93A8C0;
+    --accent: #3D96F0; --accent-ink: #A9D2FF; --accent-soft: #10325A; --accent-line: #24548A;
     --warn-bg: #2A2112; --warn-line: #5C4520; --warn-ink: #F2D3A0;
     --danger: #FF8A80; --danger-bg: #2E1514;
     --ok: #6CE9A6; --ok-bg: #0F2A1E;
@@ -98,12 +99,19 @@ textarea.input { min-height: 90px; resize: vertical; }
 /* schermate di accesso */
 .auth-wrap { min-height: 100vh; display: flex; align-items: center; justify-content: center; padding: 32px 16px; }
 .auth { width: 100%; max-width: 440px; }
-.brand { display: flex; align-items: center; gap: 10px; font-weight: 600; font-size: 17px; }
-.brand img { width: 30px; height: 30px; }
+.brand { display: flex; flex-direction: column; align-items: flex-start; gap: 4px; }
+.brand-logo { height: 34px; width: auto; display: block; }
+.brand-name { font-size: 12px; font-weight: 600; letter-spacing: 1.6px; text-transform: uppercase; color: var(--accent); }
+.brand.small .brand-logo { height: 24px; }
+.brand.small .brand-name { font-size: 10.5px; letter-spacing: 1.2px; }
+/* In tema scuro il logo poggia su una base bianca, per restare leggibile. */
+@media (prefers-color-scheme: dark) {
+  .brand-logo { background: #FFFFFF; padding: 6px 10px; border-radius: 8px; box-sizing: content-box; }
+}
 
 /* layout applicazione */
 .shell { display: flex; min-height: 100vh; }
-.side { width: 248px; flex-shrink: 0; background: var(--surface); border-right: 1px solid var(--line); padding: 22px 14px; display: flex; flex-direction: column; gap: 22px; position: sticky; top: 0; height: 100vh; overflow-y: auto; }
+.side { border-top: 4px solid var(--accent); width: 248px; flex-shrink: 0; background: var(--surface); border-right: 1px solid var(--line); padding: 22px 14px; display: flex; flex-direction: column; gap: 22px; position: sticky; top: 0; height: 100vh; overflow-y: auto; }
 .nav { display: flex; flex-direction: column; gap: 2px; }
 .nav-title { font-size: 12px; color: var(--muted); padding: 0 12px 4px; }
 .nav a { display: flex; justify-content: space-between; align-items: center; min-height: 40px; padding: 0 12px; border-radius: 8px; color: var(--ink-2); text-decoration: none; }

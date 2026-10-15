@@ -11,7 +11,9 @@ master password non viene mai trasmessa) e dati cifrati sul dispositivo
 **Dati non raccolti.** L'estensione non legge la cronologia, non raccoglie dati
 di navigazione, non usa strumenti di analisi e non comunica con terze parti.
 Legge l'indirizzo della scheda attiva solo per proporre le credenziali di quel
-sito, e modifica la pagina solo quando l'utente preme «Compila».
+sito, e modifica la pagina solo quando l'utente preme «Compila». Se l'utente
+attiva l'icona nei campi di accesso, nelle pagine HTTPS viene aggiunta solo
+un'icona: lo script non legge né trasmette i contenuti delle pagine.
 
 **Conservazione.** Le impostazioni restano nel browser. Le chiavi sbloccate
 restano solo in memoria e vengono cancellate al blocco o alla chiusura del

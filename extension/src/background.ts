@@ -15,6 +15,17 @@ chrome.alarms.onAlarm.addListener(async (a) => {
 
 chrome.runtime.onMessage.addListener((msg, sender) => {
   if (sender.id !== chrome.runtime.id) return;
+  // Clic sull'icona nei campi: apre il popup, dove avvengono ricerca e compilazione.
+  if (msg?.type === "open-popup" && sender.tab) {
+    chrome.action.openPopup({ windowId: sender.tab.windowId }).catch(() => {
+      // Browser che non permettono l'apertura: segnaliamo sull'icona della barra.
+      if (sender.tab?.id) {
+        chrome.action.setBadgeBackgroundColor({ color: "#0068CF", tabId: sender.tab.id });
+        chrome.action.setBadgeText({ text: "1", tabId: sender.tab.id });
+      }
+    });
+    return;
+  }
   if (msg?.type === "clear-clipboard") {
     const seconds = Math.max(30, Math.min(300, Number(msg.afterSeconds) || 30));
     chrome.alarms.create("clear-clipboard", { when: Date.now() + seconds * 1000 });

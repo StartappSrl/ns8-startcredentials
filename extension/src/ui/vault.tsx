@@ -2,7 +2,7 @@ import { ComponentChildren } from "preact";
 import { useEffect, useMemo, useState } from "preact/hooks";
 import { Container, DirectoryUser, Folder, generatePassword, Item, ItemData, Permission, Vault } from "@startcredentials/client";
 import { download, initials, lock, relTime, signOut, tint } from "../shared";
-import { CopyButton, Dialog, ErrorNote, Meter, OtpCode, Secret, useAction, useLoad, useToast } from "./kit";
+import { Brand, CopyButton, Dialog, ErrorNote, Meter, OtpCode, Secret, useAction, useLoad, useToast } from "./kit";
 
 export const PERM_LABEL: Record<Permission, string> = { read: "Sola lettura", write: "Può modificare", manage: "Può gestire" };
 const TYPE_LABEL: Record<ItemData["type"], string> = { login: "Password", totp: "OTP", note: "Nota sicura", file: "File", ssh_key: "Chiave SSH" };
@@ -31,7 +31,7 @@ export function Shell({ vault, route, children, counts }: { vault: Vault; route:
   return (
     <div class="shell">
       <nav class="side" aria-label="Navigazione principale">
-        <div class="brand" style="padding:0 8px"><img src="icons/128.png" alt="" />StartCredentials</div>
+        <div style="padding:0 8px"><Brand /></div>
         <div class="nav">
           {link("/cerca", "Cerca")}
           {link("/personale", "Area personale")}
@@ -45,6 +45,7 @@ export function Shell({ vault, route, children, counts }: { vault: Vault; route:
           <div class="nav">
             <div class="nav-title">Amministrazione</div>
             {link("/admin/utenti", "Utenti")}
+            {link("/admin/gruppi", "Gruppi")}
             {link("/admin/audit", "Registro attività")}
             {link("/admin/org", "Organizzazione")}
           </div>
@@ -217,7 +218,7 @@ export function ContainerView({ vault, id, onChanged }: { vault: Vault; id: stri
           <div>
             <h1>{c.meta.name}</h1>
             <div class="muted">
-              {c.kind === "personal" ? "Visibile solo a te" : `${c.meta.sector ? `${c.meta.sector} · ` : ""}${c.members} ${c.members === 1 ? "persona" : "persone"} · ${PERM_LABEL[c.permission]}`}
+              {c.kind === "personal" ? "Visibile solo a te" : `${c.meta.sector ? `${c.meta.sector} · ` : ""}${c.members} ${c.members === 1 ? "persona" : "persone"}${c.groups ? ` e ${c.groups} ${c.groups === 1 ? "gruppo" : "gruppi"}` : ""} · ${PERM_LABEL[c.permission]}${c.viaGroups.length ? ` tramite il gruppo ${c.viaGroups.join(", ")}` : ""}`}
             </div>
           </div>
         </div>
@@ -603,7 +604,8 @@ function ShareDialog({ vault, container, onClose }: { vault: Vault; container: C
           </div>
         ))}
       </div>
-      <div class="notice info">La chiave del cliente viene cifrata qui, con la chiave pubblica certificata di ogni destinatario. Rimuovendo una persona la chiave viene ruotata subito.</div>
+      <GroupShares vault={vault} container={container} />
+      <div class="notice info">La chiave del cliente viene cifrata qui, con la chiave pubblica certificata di ogni destinatario o gruppo. Rimuovendo una persona o un gruppo la chiave viene ruotata subito.</div>
       <ErrorNote error={error} />
       {confirmRevoke && (
         <Dialog title="Rimuovere l'accesso?" onClose={() => setConfirmRevoke(null)}>
@@ -621,6 +623,76 @@ function ShareDialog({ vault, container, onClose }: { vault: Vault; container: C
         </Dialog>
       )}
     </Dialog>
+  );
+}
+
+function GroupShares({ vault, container }: { vault: Vault; container: Container }) {
+  const shared = useLoad(() => vault.containerGroups(container.id), [container.id]);
+  const groups = useLoad(() => vault.groups(), []);
+  const [pick, setPick] = useState("");
+  const [perm, setPerm] = useState<Permission>("read");
+  const [confirm, setConfirm] = useState<{ groupId: string; name: string } | null>(null);
+  const { busy, error, run } = useAction();
+  const toast = useToast();
+  const available = (groups.data ?? []).filter((g) => g.verified && !g.rotationRequired && !shared.data?.some((x) => x.groupId === g.id));
+  if (!groups.data?.length) return null;
+  return (
+    <div class="stack">
+      <h3>Gruppi</h3>
+      <div class="row" style="flex-wrap:nowrap;align-items:flex-end">
+        <label class="field grow">Condividi con un gruppo
+          <select class="input" value={pick} onChange={(e) => setPick(e.currentTarget.value)}>
+            <option value="">Scegli…</option>
+            {available.map((g) => <option value={g.id}>{g.name} ({g.members} {g.members === 1 ? "persona" : "persone"})</option>)}
+          </select>
+        </label>
+        <label class="field">Permesso del gruppo
+          <select class="input" value={perm} onChange={(e) => setPerm(e.currentTarget.value as Permission)}>
+            {(["read", "write", "manage"] as const).map((p) => <option value={p}>{PERM_LABEL[p]}</option>)}
+          </select>
+        </label>
+        <button class="btn primary" disabled={busy || !pick} onClick={() => run(async () => {
+          await vault.shareWithGroup(container.id, pick, perm);
+          setPick("");
+          shared.reload();
+          toast("Condiviso con il gruppo");
+        })}>Condividi con il gruppo</button>
+      </div>
+      {(shared.data ?? []).length > 0 && (
+        <div class="card">
+          {shared.data!.map((g) => (
+            <div class="row" style="padding:10px 14px;border-bottom:1px solid var(--line);flex-wrap:nowrap">
+              <div class="avatar">{initials(g.name)}</div>
+              <div class="grow">
+                <div style="font-weight:500">Gruppo {g.name}</div>
+                <div class="small muted">{g.members} {g.members === 1 ? "persona" : "persone"}</div>
+              </div>
+              <select class="input" style="width:auto" aria-label={`Permesso del gruppo ${g.name}`} value={g.permission} disabled={busy}
+                onChange={(e) => { const p = e.currentTarget.value as Permission; run(async () => { await vault.shareWithGroup(container.id, g.groupId, p); shared.reload(); }); }}>
+                {(["read", "write", "manage"] as const).map((p) => <option value={p}>{PERM_LABEL[p]}</option>)}
+              </select>
+              <button class="btn sm ghost danger" onClick={() => setConfirm({ groupId: g.groupId, name: g.name })}>Rimuovi</button>
+            </div>
+          ))}
+        </div>
+      )}
+      <ErrorNote error={error} />
+      {confirm && (
+        <Dialog title={`Togliere il gruppo ${confirm.name}?`} onClose={() => setConfirm(null)}>
+          <p>Tutti i membri del gruppo perdono l'accesso a questo cliente, salvo chi ce l'ha anche direttamente. La chiave del cliente viene ruotata subito.</p>
+          <ErrorNote error={error} />
+          <div class="row" style="justify-content:flex-end">
+            <button class="btn" onClick={() => setConfirm(null)}>Annulla</button>
+            <button class="btn primary" disabled={busy} onClick={() => run(async () => {
+              await vault.unshareGroup(container.id, confirm.groupId);
+              setConfirm(null);
+              shared.reload();
+              toast("Gruppo rimosso e chiave ruotata");
+            })}>{busy ? "Rotazione…" : "Rimuovi e ruota la chiave"}</button>
+          </div>
+        </Dialog>
+      )}
+    </div>
   );
 }
 

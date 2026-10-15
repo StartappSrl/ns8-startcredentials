@@ -4,13 +4,13 @@ import {
   Api, completeRecovery, enableMfa, login, register, serverStatus, setupMfa, Vault, verifyMfa,
 } from "@startcredentials/client";
 import { api, ensureServerPermission, getSettings, saveSettings, saveToken, signOut, storeVault } from "../shared";
-import { CopyButton, ErrorNote, Meter, Qr, strength, useAction, useLoad } from "./kit";
+import { Brand, CopyButton, ErrorNote, Meter, Qr, strength, useAction, useLoad } from "./kit";
 
 export function AuthFrame({ title, intro, children }: { title: string; intro?: ComponentChildren; children: ComponentChildren }) {
   return (
     <div class="auth-wrap">
       <div class="auth stack-lg">
-        <div class="brand"><img src="icons/128.png" alt="" />StartCredentials</div>
+        <Brand />
         <div class="card pad stack-lg">
           <div class="stack" style="gap:6px">
             <h1 style="font-size:22px">{title}</h1>

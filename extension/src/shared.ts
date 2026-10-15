@@ -15,6 +15,7 @@ export interface Settings {
   pinnedOrgSignPublic?: string;
   autoLockMinutes: number;
   clipboardSeconds: number;
+  inlineIcon?: boolean;
 }
 
 const DEFAULTS: Settings = { autoLockMinutes: 15, clipboardSeconds: 30 };
@@ -126,13 +127,37 @@ export async function ensureServerPermission(serverUrl: string): Promise<boolean
   return chrome.permissions.request({ origins: [origin] });
 }
 
+const INLINE_ID = "sc-inline";
+
+/** Attiva l'icona nei campi: chiede il permesso per le pagine HTTPS e registra lo script. */
+export async function enableInlineIcon(): Promise<boolean> {
+  const ok = await chrome.permissions.request({ origins: ["https://*/*"] });
+  if (!ok) return false;
+  const existing = await chrome.scripting.getRegisteredContentScripts({ ids: [INLINE_ID] });
+  if (!existing.length) {
+    await chrome.scripting.registerContentScripts([{
+      id: INLINE_ID, js: ["inline.js"], matches: ["https://*/*"], runAt: "document_idle", allFrames: false, persistAcrossSessions: true,
+    }]);
+  }
+  await saveSettings({ inlineIcon: true });
+  return true;
+}
+
+export async function disableInlineIcon(): Promise<void> {
+  const existing = await chrome.scripting.getRegisteredContentScripts({ ids: [INLINE_ID] });
+  if (existing.length) await chrome.scripting.unregisterContentScripts({ ids: [INLINE_ID] });
+  // Il permesso sulle pagine HTTPS non viene revocato da qui: comprende anche il
+  // server StartCredentials. Senza lo script registrato non viene comunque usato.
+  await saveSettings({ inlineIcon: false });
+}
+
 export function initials(name: string): string {
   const parts = name.replace(/[^\p{L}\p{N} ]/gu, " ").split(/\s+/).filter(Boolean);
   return ((parts[0]?.[0] ?? "?") + (parts[1]?.[0] ?? "")).toUpperCase();
 }
 
 const TINTS = [
-  ["#E8E7FF", "#3730A3"], ["#FBEBD6", "#6B3A05"], ["#E3E9F8", "#1F3B78"], ["#F1E4F2", "#5A2563"],
+  ["#E8F2FC", "#00519F"], ["#FBEBD6", "#6B3A05"], ["#E3E9F8", "#1F3B78"], ["#F1E4F2", "#5A2563"],
   ["#E4EFDB", "#2C5A16"], ["#F6E2DC", "#7A2A12"], ["#DDF0F2", "#0E5560"], ["#F3EBD3", "#5E4A0B"],
 ];
 export function tint(seed: string): { bg: string; fg: string } {
@@ -167,6 +192,11 @@ export function errorText(e: unknown): string {
     unauthorized: "Sessione scaduta: accedi di nuovo.",
     email_taken: "Esiste già un utente con questa email.",
     cannot_modify_self: "Questa operazione non si può fare sul proprio account.",
+    group_name_taken: "Esiste già un gruppo con questo nome.",
+    group_rotation_pending: "La chiave del gruppo deve prima essere ruotata da un suo gestore.",
+    last_group_manager: "Il gruppo deve avere almeno un gestore.",
+    group_managers_must_be_admins: "Solo gli amministratori possono essere gestori di un gruppo.",
+    group_manager_required: "Solo i gestori del gruppo possono modificarlo.",
   };
   const err = e as { code?: string; message?: string };
   return (err.code && map[err.code]) || err.message || "Errore imprevisto.";

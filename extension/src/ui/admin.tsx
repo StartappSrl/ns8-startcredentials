@@ -3,7 +3,7 @@ import {
   ApiError, Container, generatePassword, import1Password, importBitwarden, importCsv, importInto, importKeePass, ImportResult,
   importStartCredentials, Vault,
 } from "@startcredentials/client";
-import { download, getSettings, initials, lock, saveSettings, signOut } from "../shared";
+import { disableInlineIcon, download, enableInlineIcon, getSettings, initials, lock, saveSettings, signOut } from "../shared";
 import { BackupCodes } from "./auth";
 import { CopyButton, Dialog, ErrorNote, Meter, useAction, useLoad, useToast } from "./kit";
 import { go } from "./vault";
@@ -538,6 +538,21 @@ export function SettingsPage({ vault }: { vault: Vault }) {
             {[30, 60, 120].map((x) => <option value={x}>{x} secondi</option>)}
           </select>
         </label>
+        <label class="check">
+          <input type="checkbox" checked={!!s.data.inlineIcon} onChange={async (e) => {
+            const on = e.currentTarget.checked;
+            if (on) {
+              if (await enableInlineIcon()) toast("Icona attivata: ricarica le pagine già aperte");
+              else toast("Permesso non concesso");
+            } else {
+              await disableInlineIcon();
+              toast("Icona disattivata");
+            }
+            s.reload();
+          }} />
+          Mostra l'icona StartCredentials nei campi di accesso dei siti
+        </label>
+        <p class="small muted">Richiede il permesso di accedere alle pagine HTTPS. L'icona apre solo il popup: la compilazione resta sempre manuale e su corrispondenza esatta del dominio. In alternativa usa la scorciatoia Ctrl+Maiusc+L.</p>
         <p class="small muted">Server: <span class="mono">{s.data.serverUrl}</span></p>
         <div class="row">
           <button class="btn" onClick={async () => { await lock(); location.reload(); }}>Blocca ora</button>

@@ -5,7 +5,7 @@ import { z } from "zod";
 import { audit, badRequest, conflict, Db, notFound, Tx, tx } from "../core.js";
 import { Ctx, requireAuth } from "../server.js";
 import { schemas } from "./auth.js";
-import { requirePermission } from "./containers.js";
+import { ACCESSIBLE_CONTAINERS, requirePermission } from "./containers.js";
 
 const { b64, envelope } = schemas;
 const uuid = z.string().uuid();
@@ -241,9 +241,9 @@ export async function itemRoutes(app: FastifyInstance, ctx: Ctx) {
     const r = await db.query(
       `SELECT i.id, i.container_id FROM items i
          JOIN containers c ON c.id = i.container_id AND c.deleted_at IS NULL
-         JOIN container_keys k ON k.container_id = c.id AND k.key_version = c.key_version AND k.user_id = $1
          JOIN unnest($2::uuid[], $3::text[]) AS q(container_id, host_hash) ON q.container_id = i.container_id
-        WHERE i.deleted_at IS NULL AND i.host_hashes @> ARRAY[q.host_hash]`,
+        WHERE i.deleted_at IS NULL AND i.host_hashes @> ARRAY[q.host_hash]
+          AND c.id IN (${ACCESSIBLE_CONTAINERS})`,
       [a.id, queries.map((q) => q.containerId), queries.map((q) => q.hostHash)]);
     return r.rows.map((x) => ({ itemId: x.id, containerId: x.container_id }));
   });

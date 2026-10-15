@@ -7,6 +7,7 @@ import { ErrorNote, ToastHost, useLoad } from "./ui/kit";
 import { Clients, ContainerView, go, Shell, useRoute } from "./ui/vault";
 import { Audit, Generator, Import, Org, SettingsPage, Users } from "./ui/admin";
 import { Health, Search } from "./ui/tools";
+import { Groups } from "./ui/groups";
 
 type Phase =
   | { p: "loading" }
@@ -100,7 +101,7 @@ function Main({ vault }: { vault: Vault }) {
   // Rotazioni rimaste in sospeso (revoche interrotte, colleghi usciti): le completa il primo gestore.
   const [rotated, setRotated] = useState<string | null>(null);
   useEffect(() => {
-    if (!containers.data?.some((c) => c.rotationRequired && c.permission === "manage")) return;
+    if (!containers.data?.some((c) => c.rotationRequired && c.permission === "manage") && vault.me.role !== "admin") return;
     vault.completePendingRotations().then((r) => {
       if (r.done.length) {
         setRotated(`Chiavi ruotate per ${r.done.length} ${r.done.length === 1 ? "cliente" : "clienti"} dopo la rimozione di un membro: ${r.done.join(", ")}.`);
@@ -122,6 +123,7 @@ function Main({ vault }: { vault: Vault }) {
   else if (route === "/import") page = <Import vault={vault} containers={list} onChanged={containers.reload} />;
   else if (route === "/impostazioni") page = <SettingsPage vault={vault} />;
   else if (route === "/admin/utenti" && vault.me.role === "admin") page = <Users vault={vault} />;
+  else if (route === "/admin/gruppi" && vault.me.role === "admin") page = <Groups vault={vault} />;
   else if (route === "/admin/audit" && vault.me.role === "admin") page = <Audit vault={vault} containers={list} />;
   else if (route === "/admin/org" && vault.me.role === "admin") page = <Org vault={vault} onChanged={async () => { await vault.refreshMe(); containers.reload(); }} />;
   else page = <Clients vault={vault} containers={list} reload={containers.reload} />;

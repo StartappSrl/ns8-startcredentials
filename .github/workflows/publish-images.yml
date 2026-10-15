@@ -41,7 +41,8 @@ jobs:
           buildah login -u "${{ github.actor }}" --password-stdin ghcr.io <<<"${{ secrets.GITHUB_TOKEN }}"
           for image in ${{ steps.build.outputs.images }}; do
             buildah push "$image" "docker://${image}:${IMAGETAG}"
-            if [ "${IMAGETAG}" = "main" ]; then
+            # latest solo per le versioni rilasciate con un tag git
+            if [ "${GITHUB_REF_TYPE}" = "tag" ]; then
               buildah push "$image" "docker://${image}:latest"
             fi
             echo "::notice title=Immagine pubblicata::${image}:${IMAGETAG}"

@@ -1,6 +1,6 @@
 {
   "name": "@startcredentials/crypto",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Core crittografico zero-knowledge di StartCredentials",
   "license": "GPL-3.0-or-later",
   "type": "module",

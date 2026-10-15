@@ -10,6 +10,7 @@ import { authRoutes } from "./routes/auth.js";
 import { userRoutes } from "./routes/users.js";
 import { containerRoutes } from "./routes/containers.js";
 import { itemRoutes } from "./routes/items.js";
+import { groupRoutes } from "./routes/groups.js";
 import { createMailer, Mailer } from "./mail.js";
 
 export interface AuthUser {
@@ -72,7 +73,7 @@ export async function buildApp(cfg: Config, db: Db): Promise<FastifyInstance> {
   app.addContentTypeParser("application/octet-stream", { parseAs: "buffer", bodyLimit: 2 * 1024 * 1024 }, (_r, body, done) => done(null, body));
 
   app.addHook("onSend", async (_req, reply, payload) => {
-    reply.header("Cache-Control", "no-store");
+    if (!reply.hasHeader("Cache-Control")) reply.header("Cache-Control", "no-store");
     reply.header("X-Content-Type-Options", "nosniff");
     reply.header("X-Frame-Options", "DENY");
     reply.header("Referrer-Policy", "no-referrer");
@@ -114,12 +115,15 @@ export async function buildApp(cfg: Config, db: Db): Promise<FastifyInstance> {
   await userRoutes(app, ctx);
   await containerRoutes(app, ctx);
   await itemRoutes(app, ctx);
+  await groupRoutes(app, ctx);
 
   const landing = readFileSync(join(APP_ROOT, "public", "index.html"));
   app.get("/", async (_req, reply) => reply
     .type("text/html; charset=utf-8")
-    .header("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'")
+    .header("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'; img-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'")
     .send(landing));
+  const logo = readFileSync(join(APP_ROOT, "public", "startapp-logo.png"));
+  app.get("/startapp-logo.png", async (_req, reply) => reply.type("image/png").header("Cache-Control", "public, max-age=86400").send(logo));
   const privacy = readFileSync(join(APP_ROOT, "public", "privacy.html"));
   app.get("/privacy", async (_req, reply) => reply
     .type("text/html; charset=utf-8")
