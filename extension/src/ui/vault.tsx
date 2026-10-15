@@ -33,9 +33,11 @@ export function Shell({ vault, route, children, counts }: { vault: Vault; route:
       <nav class="side" aria-label="Navigazione principale">
         <div class="brand" style="padding:0 8px"><img src="icons/128.png" alt="" />StartCredentials</div>
         <div class="nav">
+          {link("/cerca", "Cerca")}
           {link("/personale", "Area personale")}
           {link("/clienti", "Clienti", counts.clients)}
           {link("/condivisi", "Condivisi con me", counts.shared)}
+          {link("/salute", "Salute password")}
           {link("/generatore", "Generatore")}
           {link("/import", "Importa")}
         </div>

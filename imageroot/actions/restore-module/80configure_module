@@ -23,6 +23,7 @@ response = agent.tasks.run(
     data={
         "host": host,
         "lets_encrypt": (env.get("STARTCREDENTIALS_LETS_ENCRYPT") or os.environ.get("STARTCREDENTIALS_LETS_ENCRYPT")) == "true",
+        "mail_from": env.get("STARTCREDENTIALS_MAIL_FROM") or os.environ.get("STARTCREDENTIALS_MAIL_FROM", ""),
     },
 )
 agent.assert_exp(response["exit_code"] == 0)

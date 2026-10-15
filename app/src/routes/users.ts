@@ -2,10 +2,12 @@ import { FastifyInstance } from "fastify";
 import { randomUUID } from "node:crypto";
 import { z } from "zod";
 import { CryptoError, verifyUserCertification } from "@startcredentials/crypto";
-import { audit, badRequest, conflict, forbidden, newToken, notFound, tokenHash, tx, verifyAuditChain } from "../core.js";
+import { audit, badRequest, conflict, forbidden, HttpError, newToken, notFound, tokenHash, tx, verifyAuditChain } from "../core.js";
 import { Ctx, requireAdmin, requireAuth } from "../server.js";
 import { schemas } from "./auth.js";
 import { insertGrant, grantSchema, permissionOf } from "./containers.js";
+import * as opaque from "@serenity-kit/opaque";
+import { newBackupCodes, verifySecondFactor } from "./auth.js";
 
 const { b64, envelope, kdfParams } = schemas;
 
@@ -36,6 +38,56 @@ export async function userRoutes(app: FastifyInstance, ctx: Ctx) {
     const { recoveryEnc } = z.object({ recoveryEnc: b64 }).parse(req.body);
     await db.query("UPDATE user_keys k SET recovery_enc = $2 FROM users u WHERE u.id = $1 AND k.user_id = u.id AND k.version = u.key_version", [a.id, recoveryEnc]);
     return { ok: true };
+  });
+
+  // ------------------------------------------------------------ cambio master password
+
+  // Il client ha già verificato la vecchia password aprendo le proprie chiavi;
+  // qui registra le nuove credenziali OPAQUE e la nuova copia cifrata delle chiavi.
+  app.post("/api/v1/me/password/start", async (req) => {
+    const a = requireAuth(req);
+    const { registrationRequest } = z.object({ registrationRequest: b64 }).parse(req.body);
+    ctx.keyLimiter.check(`pw:${a.id}`);
+    const { registrationResponse } = opaque.server.createRegistrationResponse({
+      serverSetup: ctx.serverSetup, userIdentifier: a.id, registrationRequest,
+    });
+    return { registrationResponse };
+  });
+
+  app.post("/api/v1/me/password/finish", async (req) => {
+    const a = requireAuth(req);
+    const body = z.object({ registrationRecord: b64, privateEnc: envelope, kdfParams, code: z.string().max(20) }).parse(req.body);
+    ctx.keyLimiter.check(`pw:${a.id}`);
+    return tx(db, async (c) => {
+      // Una sessione rubata non basta: serve anche il secondo fattore.
+      if (!(await verifySecondFactor(c, ctx, a.id, body.code))) throw badRequest("invalid_code");
+      const u = await c.query("SELECT key_version FROM users WHERE id = $1", [a.id]);
+      await c.query("UPDATE user_keys SET private_enc = $3, kdf_params = $4 WHERE user_id = $1 AND version = $2",
+        [a.id, u.rows[0].key_version, body.privateEnc, body.kdfParams]);
+      await c.query("UPDATE users SET opaque_record = $2 WHERE id = $1", [a.id, body.registrationRecord]);
+      const r = await c.query("DELETE FROM sessions WHERE user_id = $1 AND id <> $2", [a.id, a.sessionId]);
+      await audit(c, { actorId: a.id, action: "user.password_changed", targetType: "user", targetId: a.id, ip: req.ip, details: { sessionsClosed: r.rowCount } });
+      return { ok: true, sessionsClosed: r.rowCount };
+    });
+  });
+
+  app.post("/api/v1/me/mfa/backup-codes", async (req) => {
+    const a = requireAuth(req);
+    const { code } = z.object({ code: z.string().max(20) }).parse(req.body);
+    ctx.keyLimiter.check(`mfa:${a.id}`);
+    return tx(db, async (c) => {
+      if (!(await verifySecondFactor(c, ctx, a.id, code))) throw badRequest("invalid_code");
+      const backup = newBackupCodes(ctx);
+      await c.query("UPDATE users SET mfa_backup_codes = $2 WHERE id = $1", [a.id, JSON.stringify(backup.hashes)]);
+      await audit(c, { actorId: a.id, action: "auth.mfa_backup_regenerated", ip: req.ip });
+      return { backupCodes: backup.codes };
+    });
+  });
+
+  app.get("/api/v1/me/mfa", async (req) => {
+    const a = requireAuth(req);
+    const r = await db.query("SELECT mfa_backup_codes FROM users WHERE id = $1", [a.id]);
+    return { backupCodesRemaining: (r.rows[0]?.mfa_backup_codes ?? []).length };
   });
 
   // Rubrica: chiavi pubbliche e certificazioni per poter condividere.
@@ -135,6 +187,59 @@ export async function userRoutes(app: FastifyInstance, ctx: Ctx) {
       await c.query("UPDATE user_keys SET certification = $3, certified_by = $4 WHERE user_id = $1 AND version = $2", [id, body.keyVersion, body.certification, a.id]);
       await audit(c, { actorId: a.id, action: "user.key_certified", targetType: "user", targetId: id, ip: req.ip, details: { keyVersion: body.keyVersion } });
       return { ok: true };
+    });
+  });
+
+  // ------------------------------------------------------------ MFA e uscita (lato admin)
+
+  /** Telefono perso: azzera il secondo fattore; al prossimo accesso l'utente lo riconfigura. */
+  app.post("/api/v1/users/:id/mfa-reset", async (req) => {
+    const a = requireAdmin(req);
+    const { id } = z.object({ id: z.string().uuid() }).parse(req.params);
+    if (id === a.id) throw forbidden("cannot_modify_self");
+    return tx(db, async (c) => {
+      const r = await c.query(
+        "UPDATE users SET mfa_enabled = false, mfa_secret_enc = NULL, mfa_backup_codes = NULL, mfa_last_counter = 0 WHERE id = $1 AND status = 'active' RETURNING id", [id]);
+      if (!r.rows[0]) throw notFound();
+      await c.query("DELETE FROM sessions WHERE user_id = $1", [id]);
+      await audit(c, { actorId: a.id, action: "user.mfa_reset", targetType: "user", targetId: id, ip: req.ip });
+      return { ok: true };
+    });
+  });
+
+  /**
+   * Uscita di un collega: sospende l'account, chiude le sessioni ed elimina
+   * subito tutte le sue chiavi dei contenitori. Le chiavi vanno poi ruotate:
+   * il server non può farlo (non le conosce), quindi segna i contenitori e
+   * il primo gestore che apre la cassaforte completa la rotazione.
+   */
+  app.post("/api/v1/users/:id/offboard", async (req) => {
+    const a = requireAdmin(req);
+    const { id } = z.object({ id: z.string().uuid() }).parse(req.params);
+    const { force } = z.object({ force: z.boolean().default(false) }).parse(req.body ?? {});
+    if (id === a.id) throw forbidden("cannot_modify_self");
+    return tx(db, async (c) => {
+      const u = await c.query("SELECT status FROM users WHERE id = $1 FOR UPDATE", [id]);
+      if (!u.rows[0]) throw notFound();
+      // Contenitori condivisi in cui l'utente era l'unico gestore: segnalati, non bloccati.
+      const orphan = await c.query(
+        `SELECT k.container_id FROM container_keys k JOIN containers ct ON ct.id = k.container_id AND ct.key_version = k.key_version
+          WHERE k.user_id = $1 AND k.permission = 'manage' AND ct.kind <> 'personal' AND ct.deleted_at IS NULL
+            AND NOT EXISTS (SELECT 1 FROM container_keys o WHERE o.container_id = k.container_id AND o.key_version = ct.key_version
+                            AND o.user_id <> $1 AND o.permission = 'manage')`, [id]);
+      if (orphan.rowCount && !force) {
+        throw new HttpError(409, "containers_without_manager",
+          `${orphan.rowCount} clienti hanno questa persona come unico gestore: nomina prima un altro gestore, oppure conferma per renderli non più gestibili`);
+      }
+      const touched = await c.query(
+        `UPDATE containers SET rotation_required = true
+          WHERE kind <> 'personal' AND id IN (SELECT container_id FROM container_keys WHERE user_id = $1) RETURNING id`, [id]);
+      await c.query("DELETE FROM container_keys k USING containers ct WHERE k.container_id = ct.id AND ct.kind <> 'personal' AND k.user_id = $1", [id]);
+      await c.query("UPDATE users SET status = 'suspended', role = 'user' WHERE id = $1", [id]);
+      await c.query("DELETE FROM sessions WHERE user_id = $1", [id]);
+      await audit(c, { actorId: a.id, action: "user.offboarded", targetType: "user", targetId: id, ip: req.ip,
+        details: { containers: touched.rowCount, withoutManager: orphan.rowCount } });
+      return { containers: touched.rowCount, withoutManager: orphan.rows.map((r) => r.container_id) };
     });
   });
 

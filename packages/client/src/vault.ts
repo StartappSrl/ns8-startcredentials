@@ -37,6 +37,7 @@ export interface Folder { id: string; parentId: string | null; name: string }
 export interface Container {
   id: string; kind: "client" | "personal" | "org"; keyVersion: number; permission: Permission;
   meta: ContainerMeta; members: number; items: number; totpItems: number; updatedAt: string; grantedBy: string;
+  rotationRequired: boolean;
 }
 export interface Attachment { id: string; name: string; mime: string; size: number; chunkCount: number; header: string; fkEnc: string }
 export interface Item {
@@ -57,12 +58,45 @@ export type SessionState = "mfa_setup" | "mfa_pending" | "active";
 
 interface RawContainer {
   id: string; kind: Container["kind"]; metaKeyEnc: string; metaEnc: string; keyVersion: number; updatedAt: string;
-  members: number; items: number; totpItems: number; grant: KeyGrant; grantorSignPublic: string;
+  members: number; items: number; totpItems: number; grant: KeyGrant; grantorSignPublic: string; rotationRequired: boolean;
 }
 interface RawItem {
   id: string; folderId: string | null; type: ItemData["type"]; ikEnc: string; ikKeyVersion: number; dataEnc: string;
   revision: number; updatedAt: string; updatedBy: string; deletedAt: string | null;
   attachments: { id: string; fkEnc: string; metaEnc: string; header: string; size: number; chunkCount: number }[];
+}
+
+export interface ExportData {
+  format: "startcredentials-export";
+  version: 1;
+  exportedAt: string;
+  exportedBy: string;
+  containers: {
+    kind: "client" | "personal" | "org";
+    meta: ContainerMeta;
+    folders: { key: string; name: string; parentKey: string | null }[];
+    items: { folderKey: string | null; data: ItemData }[];
+  }[];
+}
+
+/** Apre un export cifrato di StartCredentials. */
+export async function decryptExport(file: string, passphrase: string): Promise<ExportData> {
+  await ready();
+  let outer: { format?: string; kdfParams: KdfParams; data: string };
+  try {
+    outer = JSON.parse(file);
+  } catch {
+    throw new Error("Il file non è un export di StartCredentials");
+  }
+  if (outer.format !== "startcredentials-export-encrypted") throw new Error("Il file non è un export di StartCredentials");
+  const key = deriveMasterKey(passphrase, outer.kdfParams);
+  try {
+    return unjson<ExportData>(open(key, outer.data, "sc:export:v1"));
+  } catch {
+    throw new SecurityError("Passphrase errata o file alterato");
+  } finally {
+    wipe(key);
+  }
 }
 
 export class SecurityError extends Error {
@@ -136,8 +170,10 @@ export async function login(api: Api, email: string, password: string): Promise<
 export async function setupMfa(api: Api): Promise<{ secret: string; otpauthUri: string }> {
   return api.post("/auth/mfa/setup");
 }
-export async function enableMfa(api: Api, code: string): Promise<void> {
-  await api.post("/auth/mfa/enable", { code });
+/** Attiva l'MFA e restituisce i 10 codici di riserva, da mostrare una volta sola. */
+export async function enableMfa(api: Api, code: string): Promise<string[]> {
+  const r = await api.post<{ backupCodes: string[] }>("/auth/mfa/enable", { code });
+  return r.backupCodes;
 }
 export async function verifyMfa(api: Api, code: string): Promise<void> {
   await api.post("/auth/mfa/verify", { code });
@@ -331,6 +367,7 @@ export class Vault {
       id: r.id, kind: r.kind, keyVersion: r.keyVersion, permission: r.grant.permission,
       meta: unjson<ContainerMeta>(open(k.metaKey, r.metaEnc, ctxs.meta(r.id))),
       members: r.members, items: r.items, totpItems: r.totpItems, updatedAt: r.updatedAt, grantedBy: r.grant.grantedBy,
+      rotationRequired: !!r.rotationRequired,
     };
   }
 
@@ -636,6 +673,101 @@ export class Vault {
     return newVersion;
   }
 
+  /**
+   * Completa le rotazioni rimaste in sospeso (revoche interrotte, colleghi
+   * usciti). Solo i gestori possono farlo: va chiamata dopo lo sblocco.
+   */
+  async completePendingRotations(): Promise<{ done: string[]; failed: { name: string; error: string }[] }> {
+    const done: string[] = [];
+    const failed: { name: string; error: string }[] = [];
+    for (const c of await this.containers()) {
+      if (!c.rotationRequired || c.permission !== "manage") continue;
+      try {
+        await this.rotate(c.id);
+        done.push(c.meta.name);
+      } catch (e) {
+        failed.push({ name: c.meta.name, error: (e as Error).message });
+      }
+    }
+    return { done, failed };
+  }
+
+  // ---------------------------------------------------------------- account
+
+  /**
+   * Cambio della master password. Verifica la password attuale aprendo le
+   * chiavi salvate sul server (protegge un dispositivo lasciato sbloccato),
+   * poi registra le nuove credenziali OPAQUE e ricifra le chiavi. Richiede
+   * anche il codice MFA. Le altre sessioni vengono chiuse.
+   */
+  async changePassword(currentPassword: string, newPassword: string, mfaCode: string, kdf?: RegisterParams["kdf"]): Promise<void> {
+    const me = await this.refreshMe();
+    const oldMk = deriveMasterKey(currentPassword, me.kdfParams);
+    try {
+      const check = unwrapPrivateKeys(oldMk, me.privateEnc, me.id, me.keyVersion);
+      wipe(check.boxPrivate);
+      wipe(check.signPrivate);
+    } catch {
+      throw new SecurityError("La master password attuale non è corretta");
+    } finally {
+      wipe(oldMk);
+    }
+    const { clientRegistrationState, registrationRequest } = opaque.client.startRegistration({ password: newPassword });
+    const { registrationResponse } = await this.api.post<{ registrationResponse: string }>("/me/password/start", { registrationRequest });
+    const { registrationRecord } = opaque.client.finishRegistration({ clientRegistrationState, registrationResponse, password: newPassword });
+    const kdfParams = kdf ? newKdfParams(kdf.opsLimit, kdf.memLimitBytes) : newKdfParams();
+    const mk = deriveMasterKey(newPassword, kdfParams);
+    try {
+      await this.api.post("/me/password/finish", {
+        registrationRecord, kdfParams, code: mfaCode, privateEnc: wrapPrivateKeys(mk, this.keys, me.id, me.keyVersion),
+      });
+    } finally {
+      wipe(mk);
+    }
+    await this.refreshMe();
+  }
+
+  async mfaStatus(): Promise<{ backupCodesRemaining: number }> {
+    return this.api.get("/me/mfa");
+  }
+
+  async regenerateBackupCodes(mfaCode: string): Promise<string[]> {
+    return (await this.api.post<{ backupCodes: string[] }>("/me/mfa/backup-codes", { code: mfaCode })).backupCodes;
+  }
+
+  /**
+   * Export completo e cifrato (Argon2id + XChaCha20-Poly1305) di tutto ciò
+   * che l'utente può leggere, escluso il contenitore dell'organizzazione.
+   * Gli allegati non sono inclusi.
+   */
+  async exportEncrypted(passphrase: string, kdf?: RegisterParams["kdf"]): Promise<{ file: string; containers: number; items: number; attachmentsSkipped: number }> {
+    const containers: ExportData["containers"] = [];
+    let items = 0;
+    let attachmentsSkipped = 0;
+    for (const c of await this.containers()) {
+      if (c.kind === "org") continue;
+      const detail = await this.container(c.id);
+      const list = await this.items(c.id);
+      items += list.length;
+      attachmentsSkipped += list.reduce((n, i) => n + i.attachments.length, 0);
+      containers.push({
+        kind: c.kind, meta: c.meta,
+        folders: detail.folders.map((f) => ({ key: f.id, name: f.name, parentKey: f.parentId })),
+        items: list.map((i) => ({ folderKey: i.folderId, data: i.data })),
+      });
+      this.report("container.export", c.id);
+    }
+    const payload: ExportData = { format: "startcredentials-export", version: 1, exportedAt: new Date().toISOString(), exportedBy: this.me.email, containers };
+    const kdfParams = kdf ? newKdfParams(kdf.opsLimit, kdf.memLimitBytes) : newKdfParams();
+    const key = deriveMasterKey(passphrase, kdfParams);
+    try {
+      const file = JSON.stringify({ format: "startcredentials-export-encrypted", version: 1, kdfParams, data: seal(key, json(payload), "sc:export:v1", "export") }, null, 1);
+      return { file, containers: containers.length, items, attachmentsSkipped };
+    } finally {
+      wipe(key);
+    }
+  }
+
   // ---------------------------------------------------------------- autofill e OTP
 
   /** Elementi che corrispondono esattamente al nome host della pagina. */
@@ -674,6 +806,18 @@ export class Vault {
       id: string; email: string; displayName: string; role: "admin" | "user"; status: string; mfaEnabled: boolean;
       createdAt: string; keyVersion: number; publicKeys: PublicKeys | null; certified: boolean; hasRecovery: boolean; recoveryPending: boolean;
     }[]>("/users");
+  }
+
+  async resetMfa(userId: string): Promise<void> {
+    await this.api.post(`/users/${userId}/mfa-reset`);
+  }
+
+  /** Uscita dall'azienda: sospende e toglie ogni accesso; le rotazioni partono subito dove possibile. */
+  async offboard(userId: string, force = false): Promise<{ containers: number; withoutManager: string[]; rotated: string[] }> {
+    const r = await this.api.post<{ containers: number; withoutManager: string[] }>(`/users/${userId}/offboard`, { force });
+    this.dirCache = undefined;
+    const { done } = await this.completePendingRotations();
+    return { ...r, rotated: done };
   }
 
   async invite(email: string, displayName: string, role: "admin" | "user") {

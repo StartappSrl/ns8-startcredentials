@@ -10,8 +10,8 @@ import { join } from "node:path";
 import { randomBytes } from "node:crypto";
 import type { FastifyInstance } from "fastify";
 import {
-  Api, ApiError, completeRecovery, enableMfa, importBitwarden, importCsv, importInto, login, register,
-  SecurityError, serverStatus, setupMfa, Vault, verifyMfa,
+  Api, ApiError, completeRecovery, decryptExport, enableMfa, importBitwarden, importCsv, importInto, importStartCredentials,
+  login, passwordHealth, register, SecurityError, serverStatus, setupMfa, Vault, verifyMfa,
 } from "@startcredentials/client";
 import { Config, createPool, Db, migrate, totpAt } from "../src/core.js";
 import { APP_ROOT, buildApp } from "../src/server.js";
@@ -45,10 +45,13 @@ async function mfaCode(userId: string): Promise<string> {
   return totpAt(decryptServerSecret(cfg, r.rows[0].mfa_secret_enc), Math.floor(Date.now() / 30000));
 }
 
-async function onboard(a: Api, userId: string) {
+async function onboard(a: Api, userId: string): Promise<string[]> {
   const setup = await setupMfa(a);
   assert.match(setup.otpauthUri, /^otpauth:\/\/totp\//);
-  await enableMfa(a, totpAt(setup.secret, Math.floor(Date.now() / 30000)));
+  const codes = await enableMfa(a, totpAt(setup.secret, Math.floor(Date.now() / 30000)));
+  assert.equal(codes.length, 10);
+  assert.ok(codes.every((c) => /^[A-Z0-9]{4}-[A-Z0-9]{4}$/.test(c)));
+  return codes;
 }
 
 async function signIn(email: string, password: string, userId: string): Promise<Vault> {
@@ -260,13 +263,108 @@ describe("StartCredentials end-to-end", () => {
     state.laura = laura;
   });
 
+  test("codici MFA di riserva: monouso, rigenerabili; reset MFA da parte dell'amministratore", async () => {
+    const sara: Vault = await signIn("sara@azienda.it", "sara master password", state.saraId);
+    const codes = await sara.regenerateBackupCodes(await mfaCode(state.saraId));
+    assert.equal((await sara.mfaStatus()).backupCodesRemaining, 10);
+    const a = api();
+    assert.equal((await login(a, "sara@azienda.it", "sara master password")).state, "mfa_pending");
+    await verifyMfa(a, codes[3]!.toLowerCase());
+    assert.equal((await sara.mfaStatus()).backupCodesRemaining, 9);
+    const b = api();
+    await login(b, "sara@azienda.it", "sara master password");
+    await rejects(verifyMfa(b, codes[3]!), "invalid_code");
+    // Telefono perso: l'amministratore azzera l'MFA, Sara la riconfigura al primo accesso.
+    await state.marco.resetMfa(state.saraId);
+    await rejects(sara.api.get("/me"), "unauthorized");
+    const c = api();
+    assert.equal((await login(c, "sara@azienda.it", "sara master password")).state, "mfa_setup");
+    await onboard(c, state.saraId);
+    state.sara = await Vault.unlock(c, "sara master password");
+  });
+
+  test("cambio della master password: serve quella attuale e il codice MFA", async () => {
+    const sara: Vault = state.sara;
+    await rejects(sara.changePassword("password sbagliata!!", "nuova password di sara", await mfaCode(state.saraId), FAST), "security");
+    await rejects(sara.changePassword("sara master password", "nuova password di sara", "000000", FAST), "invalid_code");
+    const other = api();
+    await login(other, "sara@azienda.it", "sara master password");
+    await sara.changePassword("sara master password", "nuova password di sara", await mfaCode(state.saraId), FAST);
+    await rejects(other.get("/auth/session"), "unauthorized");
+    await rejects(login(api(), "sara@azienda.it", "sara master password"), "invalid_credentials");
+    const again = await signIn("sara@azienda.it", "nuova password di sara", state.saraId);
+    assert.equal(again.myFingerprint, sara.myFingerprint);
+    await sara.api.get("/me");
+  });
+
+  test("rotazione in sospeso: completata dal primo gestore che apre la cassaforte", async () => {
+    const marco: Vault = state.marco;
+    const cid = await marco.createContainer({ name: "Revoca interrotta" });
+    await marco.createItem(cid, { type: "login", name: "x", password: "y" });
+    await marco.share(cid, state.saraId, "read");
+    // Revoca senza rotazione, come se il client si fosse chiuso a metà.
+    await marco.api.del(`/containers/${cid}/members/${state.saraId}`);
+    assert.equal((await marco.containers()).find((c) => c.id === cid)!.rotationRequired, true);
+    const r = await marco.completePendingRotations();
+    assert.ok(r.done.includes("Revoca interrotta"));
+    const c = (await marco.containers()).find((x) => x.id === cid)!;
+    assert.equal(c.rotationRequired, false);
+    assert.equal(c.keyVersion, 2);
+    assert.equal((await marco.items(cid))[0]!.data.password, "y");
+  });
+
+  test("uscita di un collega: accessi tolti ovunque e chiavi ruotate", async () => {
+    const marco: Vault = state.marco;
+    const laura = await signIn("laura@azienda.it", "nuova master password", state.lauraId);
+    const solo = await laura.createContainer({ name: "Cliente solo di Laura" });
+    await laura.createItem(solo, { type: "login", name: "z", password: "w" });
+    const before = (await marco.containers()).find((c) => c.id === state.cid)!.keyVersion;
+    // Laura è l'unica gestrice di un cliente: l'uscita si ferma finché non si conferma.
+    await rejects(marco.offboard(state.lauraId), "containers_without_manager");
+    const r = await marco.offboard(state.lauraId, true);
+    assert.equal(r.withoutManager.length, 1);
+    assert.ok(r.rotated.includes("Studio Legale Moretti"));
+    assert.equal((await marco.containers()).find((c) => c.id === state.cid)!.keyVersion, before + 1);
+    await rejects(laura.api.get("/containers"), "unauthorized");
+    await rejects(login(api(), "laura@azienda.it", "nuova master password"), "invalid_credentials");
+    const keys = await db.query("SELECT count(*)::int AS n FROM container_keys k JOIN containers c ON c.id = k.container_id WHERE k.user_id = $1 AND c.kind <> 'personal'", [state.lauraId]);
+    assert.equal(keys.rows[0].n, 0);
+    await marco.setUser(state.lauraId, { status: "active" });
+  });
+
+  test("export cifrato, reimport e rapporto sulla salute delle password", async () => {
+    const marco: Vault = state.marco;
+    const pid = await marco.ensurePersonal();
+    await marco.createItem(pid, { type: "login", name: "Debole", password: "abc123", urls: ["https://admin.example.com"] });
+    await marco.createItem(pid, { type: "login", name: "Ripetuta 1", password: "Stessa-Password-2026!" });
+    await marco.createItem(pid, { type: "login", name: "Ripetuta 2", password: "Stessa-Password-2026!" });
+    const exp = await marco.exportEncrypted("passphrase export lunga", FAST);
+    assert.ok(!exp.file.includes("Stessa-Password"), "l'export deve essere cifrato");
+    assert.ok(exp.items >= 4);
+    await assert.rejects(decryptExport(exp.file, "passphrase sbagliata!!"), SecurityError);
+    const res = await importStartCredentials(exp.file, "passphrase export lunga");
+    assert.equal(res.items.length, exp.items);
+    assert.ok(res.folders.some((f) => f.name === "Studio Legale Moretti"));
+    const target = await marco.createContainer({ name: "Ripristino export" });
+    await importInto(marco, target, res);
+    assert.equal((await marco.items(target)).length, exp.items);
+
+    const entries = [];
+    for (const c of await marco.containers()) for (const item of await marco.items(c.id)) entries.push({ container: c, item });
+    const h = passwordHealth(entries);
+    assert.ok(h.weak.some((e) => e.item.data.name === "Debole"));
+    assert.ok(h.reused.some((g) => g.some((e) => e.item.data.name === "Ripetuta 1")));
+    assert.ok(h.missingOtp.some((e) => e.item.data.name === "Debole"));
+  });
+
   test("sospensione e registro di audit a prova di manomissione", async () => {
     const marco: Vault = state.marco;
     await marco.setUser(state.lauraId, { status: "suspended" });
     await rejects(state.laura.api.get("/containers"), "unauthorized");
     await marco.setUser(state.lauraId, { status: "active" });
     const log = await marco.auditLog();
-    for (const action of ["org.initialized", "user.key_certified", "container.key_rotated", "container.imported", "user.recovery_completed", "auth.login_failed"]) {
+    for (const action of ["org.initialized", "user.key_certified", "container.key_rotated", "container.imported", "user.recovery_completed", "auth.login_failed",
+                          "auth.mfa_backup_used", "user.mfa_reset", "user.password_changed", "user.offboarded", "container.export"]) {
       assert.ok(log.some((l) => l.action === action), `manca ${action}`);
     }
     assert.equal((await marco.verifyAudit()).ok, true);

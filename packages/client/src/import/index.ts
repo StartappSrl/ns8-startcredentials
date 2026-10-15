@@ -288,6 +288,29 @@ export async function importKeePass(data: ArrayBuffer, password: string, keyFile
   return res;
 }
 
+// ------------------------------------------------------------------ export di StartCredentials
+
+/**
+ * Reimporta un export cifrato di StartCredentials in un solo contenitore:
+ * ogni cliente di origine diventa una cartella, con le sue sottocartelle.
+ */
+export async function importStartCredentials(file: string, passphrase: string): Promise<ImportResult> {
+  const { decryptExport } = await import("../vault.js");
+  const data = await decryptExport(file, passphrase);
+  const res: ImportResult = { source: "startcredentials", folders: [], items: [], skipped: [] };
+  data.containers.forEach((c, ci) => {
+    const rootKey = `c${ci}`;
+    res.folders.push({ key: rootKey, name: c.kind === "personal" ? "Area personale" : c.meta.name, parentKey: null });
+    // Le cartelle vanno create prima dei figli: ordiniamo per profondità.
+    const depth = (k: string | null): number => { const f = c.folders.find((x) => x.key === k); return f ? 1 + depth(f.parentKey) : 0; };
+    for (const f of [...c.folders].sort((a, b) => depth(a.key) - depth(b.key))) {
+      res.folders.push({ key: `${rootKey}:${f.key}`, name: f.name, parentKey: f.parentKey ? `${rootKey}:${f.parentKey}` : rootKey });
+    }
+    for (const it of c.items) res.items.push({ folderKey: it.folderKey ? `${rootKey}:${it.folderKey}` : rootKey, data: it.data });
+  });
+  return res;
+}
+
 // ------------------------------------------------------------------ scrittura nella cassaforte
 
 /** Cifra e carica il risultato di un import (lotti da 500 elementi). */

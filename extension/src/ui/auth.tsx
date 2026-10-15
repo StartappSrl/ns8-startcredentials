@@ -4,7 +4,7 @@ import {
   Api, completeRecovery, enableMfa, login, register, serverStatus, setupMfa, Vault, verifyMfa,
 } from "@startcredentials/client";
 import { api, ensureServerPermission, getSettings, saveSettings, saveToken, signOut, storeVault } from "../shared";
-import { ErrorNote, Meter, Qr, strength, useAction, useLoad } from "./kit";
+import { CopyButton, ErrorNote, Meter, Qr, strength, useAction, useLoad } from "./kit";
 
 export function AuthFrame({ title, intro, children }: { title: string; intro?: ComponentChildren; children: ComponentChildren }) {
   return (
@@ -194,7 +194,16 @@ export function Login({ onDone, onSetup }: { onDone: (password: string, state: s
 export function MfaSetup({ onDone }: { onDone: () => void }) {
   const setup = useLoad(async () => setupMfa(await api()), []);
   const [code, setCode] = useState("");
+  const [backup, setBackup] = useState<string[] | null>(null);
   const { busy, error, run } = useAction();
+  if (backup) {
+    return (
+      <AuthFrame title="Salva i codici di riserva" intro="Se perdi il telefono, ognuno di questi codici sostituisce una volta il codice dell'app. Stampali o salvali fuori da StartCredentials: non verranno mostrati di nuovo.">
+        <BackupCodes codes={backup} />
+        <button class="btn primary" onClick={onDone}>Ho salvato i codici</button>
+      </AuthFrame>
+    );
+  }
   return (
     <AuthFrame title="Proteggi l'accesso con un secondo fattore" intro="Inquadra il codice con un'app di autenticazione (Microsoft Authenticator, Google Authenticator, 2FAS) e inserisci il codice a 6 cifre.">
       <ErrorNote error={setup.error} />
@@ -207,7 +216,7 @@ export function MfaSetup({ onDone }: { onDone: () => void }) {
           </div>
         </div>
       )}
-      <form class="stack" onSubmit={(e) => { e.preventDefault(); run(async () => { await enableMfa(await api(), code.trim()); onDone(); }); }}>
+      <form class="stack" onSubmit={(e) => { e.preventDefault(); run(async () => setBackup(await enableMfa(await api(), code.trim()))); }}>
         <label class="field">Codice a 6 cifre
           <input class="input mono" inputMode="numeric" autoComplete="one-time-code" pattern="[0-9]{6}" required value={code} onInput={(e) => setCode(e.currentTarget.value)} />
         </label>
@@ -218,13 +227,27 @@ export function MfaSetup({ onDone }: { onDone: () => void }) {
   );
 }
 
+export function BackupCodes({ codes }: { codes: string[] }) {
+  return (
+    <div class="stack">
+      <div style="display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px">
+        {codes.map((c) => <div class="share-box" style="text-align:center;font-size:15px">{c}</div>)}
+      </div>
+      <div class="row">
+        <CopyButton value={codes.join("\n")} label="Copia tutti" />
+        <button type="button" class="btn sm" onClick={() => window.print()}>Stampa</button>
+      </div>
+    </div>
+  );
+}
+
 export function MfaVerify({ onDone, onCancel }: { onDone: () => void; onCancel: () => void }) {
   const [code, setCode] = useState("");
   const { busy, error, run } = useAction();
   return (
-    <AuthFrame title="Codice di verifica" intro="Inserisci il codice a 6 cifre generato dalla tua app di autenticazione.">
+    <AuthFrame title="Codice di verifica" intro="Inserisci il codice a 6 cifre generato dalla tua app di autenticazione. Se non hai il telefono, usa uno dei codici di riserva.">
       <form class="stack" onSubmit={(e) => { e.preventDefault(); run(async () => { await verifyMfa(await api(), code.trim()); onDone(); }); }}>
-        <input class="input mono" aria-label="Codice a 6 cifre" style="font-size:22px;letter-spacing:6px;text-align:center" inputMode="numeric" autoComplete="one-time-code" autoFocus pattern="[0-9]{6}" required value={code} onInput={(e) => setCode(e.currentTarget.value)} />
+        <input class="input mono" aria-label="Codice a 6 cifre" style="font-size:22px;letter-spacing:6px;text-align:center" autoComplete="one-time-code" autoFocus pattern="[0-9]{6}|[A-Za-z0-9]{4}-?[A-Za-z0-9]{4}" required value={code} onInput={(e) => setCode(e.currentTarget.value)} />
         <ErrorNote error={error} />
         <button class="btn primary" disabled={busy}>Verifica</button>
         <button type="button" class="btn ghost sm" onClick={onCancel}>Esci</button>

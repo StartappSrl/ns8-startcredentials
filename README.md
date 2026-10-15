@@ -26,11 +26,16 @@ api-cli run module/startcredentials1/configure-module --data '{"host": "credenzi
 Il modulo avvia un pod rootless con l'applicazione e PostgreSQL, pubblica
 l'host tramite Traefik solo in HTTPS e usa lo smarthost del cluster per gli inviti.
 
+Opzionale: `"mail_from": "credenziali@tuodominio.it"` imposta il mittente degli
+inviti. Se vuoto si usa l'account dello smarthost del cluster (Impostazioni →
+Smarthost), che è anche la scelta più sicura con Microsoft 365 e Gmail.
+
 ### Primo amministratore
 
 1. Nel pannello NethServer, pagina **Impostazioni** del modulo, copia il codice di attivazione.
-2. Scarica l'estensione da `https://<host>/download/startcredentials-extension.zip`
-   (oppure distribuiscila con i criteri di gruppo di Chrome/Edge) e installala.
+2. Installa l'estensione. Per le prove si scarica da `https://<host>/download/startcredentials-extension.zip`;
+   per l'uso reale va pubblicata su Chrome Web Store / Edge Add-ons e distribuita
+   con i criteri di gruppo: vedi `extension/distribution/README.md`.
 3. Nell'estensione inserisci l'indirizzo del server, poi codice di attivazione, nome, email e master password.
 4. Attiva l'MFA e, dalla pagina **Organizzazione**, inizializzala: stampa le quote di recupero e consegnale a persone diverse.
 
@@ -53,6 +58,32 @@ Al ripristino il dump viene ricaricato automaticamente al primo avvio di Postgre
 - La compilazione automatica avviene solo su corrispondenza esatta del nome host, in HTTPS, nel frame principale.
 - Il registro di audit è una catena di hash: una modifica diretta al database viene rilevata.
 
+## Funzioni
+
+Contenitori cliente con cartelle, password, OTP, note e allegati; area
+personale; condivisione con permessi di lettura, modifica e gestione; revoca
+con rotazione delle chiavi; ricerca globale; rapporto sulla salute delle
+password; import da Passbolt, KeePass, Bitwarden, 1Password, LastPass, Chrome/Edge
+e dall'export cifrato di StartCredentials; export cifrato; registro di audit.
+
+Account: MFA obbligatoria con 10 codici di riserva, cambio della master
+password, recupero con 2 quote su 3. Amministrazione: inviti, certificazione
+delle chiavi, reset dell'MFA, uscita di un collega con rimozione immediata di
+ogni accesso e rotazione delle chiavi (completata dal primo gestore di ogni
+cliente al suo accesso successivo).
+
+## Aggiornare un'installazione
+
+```
+git push
+export REPOBASE=ghcr.io/startappsrl IMAGETAG=latest
+bash build-images.sh
+# buildah login ghcr.io … ; buildah push … (vedi sopra)
+api-cli run update-module --data '{"module_url": "ghcr.io/startappsrl/startcredentials:latest", "instances": ["startcredentials1"], "force": true}'
+```
+
+Le migrazioni del database vengono applicate in automatico all'avvio dell'app.
+
 ## Sviluppo e test
 
 Serve Node.js 22 e un PostgreSQL di test (`TEST_DATABASE_URL`, predefinito `postgres://sc:sc@127.0.0.1/sc`).
@@ -61,14 +92,16 @@ Serve Node.js 22 e un PostgreSQL di test (`TEST_DATABASE_URL`, predefinito `post
 npm ci
 npm test -w packages/crypto          # 13 test del core crittografico
 npm run build -w packages/client
-npm test -w app                      # 9 scenari end-to-end su server e database reali
+npm test -w app                      # 14 scenari end-to-end su server e database reali
 npm run build -w extension           # produce extension/startcredentials-extension.zip
-npm run test:ui -w extension         # test di fumo dell'interfaccia (jsdom + server reale)
+npm run test:ui -w extension         # 22 passaggi dell'interfaccia (jsdom + server reale)
+npm run test:import -w extension     # import con il pacchetto per browser (KeePass reale, CSV, 1Password)
 ./build-images.sh                    # immagini del modulo e dell'applicazione (buildah)
 ```
 
 ## Stato
 
-Fasi 0, 1 e 2 implementate e testate. Prima dell'uso in produzione servono un
+Versione 0.2.0. Fasi 0, 1 e 2 implementate e testate; non ancora presenti:
+gruppi, icona di compilazione nei campi, app mobile. Prima dell'uso in produzione servono un
 penetration test esterno e una revisione indipendente della crittografia.
 L'app mobile (fase 3) userà `packages/crypto` e `packages/client`.

@@ -1,0 +1,9 @@
+Windows Registry Editor Version 5.00
+
+; Installa StartCredentials in Microsoft Edge per tutti gli utenti del PC.
+; Sostituire ID_ESTENSIONE con l'ID assegnato da Edge Add-ons.
+; Se usate la versione del Chrome Web Store, sostituite l'URL con
+; https://clients2.google.com/service/update2/crx
+
+[HKEY_LOCAL_MACHINE\SOFTWARE\Policies\Microsoft\Edge\ExtensionInstallForcelist]
+"1"="ID_ESTENSIONE;https://edge.microsoft.com/extensionwebstorebase/v1/crx"

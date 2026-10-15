@@ -1,11 +1,13 @@
 {
   "name": "@startcredentials/crypto",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Core crittografico zero-knowledge di StartCredentials",
   "license": "GPL-3.0-or-later",
   "type": "module",
   "main": "dist/src/index.js",
-  "exports": { ".": "./dist/src/index.js" },
+  "exports": {
+    ".": "./dist/src/index.js"
+  },
   "types": "dist/src/index.d.ts",
   "scripts": {
     "build": "tsc -p .",

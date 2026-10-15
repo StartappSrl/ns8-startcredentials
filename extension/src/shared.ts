@@ -166,6 +166,7 @@ export function errorText(e: unknown): string {
     attachment_too_large: "Il file supera il limite consentito dal server.",
     unauthorized: "Sessione scaduta: accedi di nuovo.",
     email_taken: "Esiste già un utente con questa email.",
+    cannot_modify_self: "Questa operazione non si può fare sul proprio account.",
   };
   const err = e as { code?: string; message?: string };
   return (err.code && map[err.code]) || err.message || "Errore imprevisto.";

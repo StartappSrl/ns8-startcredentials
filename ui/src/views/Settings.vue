@@ -24,7 +24,12 @@
         <NsInlineNotification
           kind="info"
           :title="$t('settings.bootstrap_title')"
-          :description="$t('settings.bootstrap_description', { token: bootstrap_token, url: 'https://' + configuredHost })"
+          :description="
+            $t('settings.bootstrap_description', {
+              token: bootstrap_token,
+              url: 'https://' + configuredHost,
+            })
+          "
           :showCloseButton="false"
         />
       </cv-column>
@@ -42,6 +47,15 @@
               :invalid-message="error.host"
               ref="host"
             ></cv-text-input>
+            <cv-text-input
+              :label="$t('settings.mail_from')"
+              v-model.trim="mail_from"
+              placeholder="credenziali@example.com"
+              :helper-text="$t('settings.mail_from_helper')"
+              :disabled="loading.getConfiguration || loading.configureModule"
+              :invalid-message="error.mail_from"
+              ref="mail_from"
+            ></cv-text-input>
             <NsToggle
               value="letsEncrypt"
               :label="$t('settings.lets_encrypt')"
@@ -49,8 +63,12 @@
               :disabled="loading.getConfiguration || loading.configureModule"
               ref="lets_encrypt"
             >
-              <template slot="text-left">{{ $t("settings.disabled") }}</template>
-              <template slot="text-right">{{ $t("settings.enabled") }}</template>
+              <template slot="text-left">{{
+                $t("settings.disabled")
+              }}</template>
+              <template slot="text-right">{{
+                $t("settings.enabled")
+              }}</template>
             </NsToggle>
             <cv-row v-if="error.configureModule">
               <cv-column>
@@ -108,6 +126,7 @@ export default {
       host: "",
       configuredHost: "",
       lets_encrypt: true,
+      mail_from: "",
       bootstrap_token: "",
       loading: {
         getConfiguration: false,
@@ -117,9 +136,9 @@ export default {
         getConfiguration: "",
         configureModule: "",
         host: "",
-      configuredHost: "",
-      lets_encrypt: true,
-      bootstrap_token: "",
+        configuredHost: "",
+        lets_encrypt: true,
+        bootstrap_token: "",
         // TODO add all validation error fields
       },
     };
@@ -191,6 +210,7 @@ export default {
       this.configuredHost = config.host;
       this.lets_encrypt = config.host ? config.lets_encrypt : true;
       this.bootstrap_token = config.bootstrap_token || "";
+      this.mail_from = config.mail_from || "";
       this.focusElement("host");
     },
     validateConfigureModule() {
@@ -256,6 +276,7 @@ export default {
           data: {
             host: this.host,
             lets_encrypt: this.lets_encrypt,
+            mail_from: this.mail_from,
           },
           extra: {
             title: this.$t("settings.configure_instance", {

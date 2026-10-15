@@ -26,6 +26,7 @@ def read_env(path):
 config = {
     "host": os.environ.get("STARTCREDENTIALS_HOST", ""),
     "lets_encrypt": os.environ.get("STARTCREDENTIALS_LETS_ENCRYPT", "false") == "true",
+    "mail_from": os.environ.get("STARTCREDENTIALS_MAIL_FROM", ""),
     # Il codice funziona solo finché non esiste un amministratore:
     # l'applicazione lo invalida al primo utilizzo.
     "bootstrap_token": read_env("app.env").get("BOOTSTRAP_TOKEN", ""),

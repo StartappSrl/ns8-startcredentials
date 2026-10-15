@@ -1,0 +1,7 @@
+Windows Registry Editor Version 5.00
+
+; Installa StartCredentials in Google Chrome per tutti gli utenti del PC.
+; Sostituire ID_ESTENSIONE con l'ID assegnato dal Chrome Web Store.
+
+[HKEY_LOCAL_MACHINE\SOFTWARE\Policies\Google\Chrome\ExtensionInstallForcelist]
+"1"="ID_ESTENSIONE;https://clients2.google.com/service/update2/crx"

@@ -4,10 +4,17 @@
     "$id": "http://schema.nethserver.org/startcredentials/configure-module-input.json",
     "description": "Configura StartCredentials",
     "examples": [
-        {"host": "credenziali.example.com", "lets_encrypt": true}
+        {
+            "host": "credenziali.example.com",
+            "lets_encrypt": true,
+            "mail_from": "credenziali@example.com"
+        }
     ],
     "type": "object",
-    "required": ["host", "lets_encrypt"],
+    "required": [
+        "host",
+        "lets_encrypt"
+    ],
     "properties": {
         "host": {
             "type": "string",
@@ -18,6 +25,18 @@
         "lets_encrypt": {
             "type": "boolean",
             "description": "Richiede un certificato Let's Encrypt per l'host"
+        },
+        "mail_from": {
+            "type": "string",
+            "description": "Indirizzo mittente delle email (vuoto = utente dello smarthost)",
+            "anyOf": [
+                {
+                    "format": "email"
+                },
+                {
+                    "maxLength": 0
+                }
+            ]
         }
     },
     "additionalProperties": false

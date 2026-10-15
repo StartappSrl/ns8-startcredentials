@@ -72,7 +72,7 @@ async function managersLeft(c: Tx, containerId: string, keyVersion: number, excl
 }
 
 const containerSelect = `
-  SELECT c.id, c.kind, c.meta_key_enc, c.meta_enc, c.key_version, c.updated_at,
+  SELECT c.id, c.kind, c.meta_key_enc, c.meta_enc, c.key_version, c.updated_at, c.rotation_required,
          k.sealed_key, k.permission, k.granted_by, k.signature, gk.sign_public AS grantor_sign_public,
          (SELECT count(*)::int FROM container_keys m WHERE m.container_id = c.id AND m.key_version = c.key_version) AS members,
          (SELECT count(*)::int FROM items i WHERE i.container_id = c.id AND i.deleted_at IS NULL) AS items,
@@ -87,6 +87,7 @@ function containerDto(r: Record<string, any>, userId: string) {
   return {
     id: r.id, kind: r.kind, metaKeyEnc: r.meta_key_enc, metaEnc: r.meta_enc, keyVersion: r.key_version,
     updatedAt: r.updated_at, members: r.members, items: r.items, totpItems: r.totp_items,
+    rotationRequired: r.rotation_required,
     grant: {
       containerId: r.id, keyVersion: r.key_version, recipientId: userId, permission: r.permission,
       sealedKey: r.sealed_key, grantedBy: r.granted_by, signature: r.signature,
@@ -199,6 +200,8 @@ export async function containerRoutes(app: FastifyInstance, ctx: Ctx) {
       if ((await managersLeft(c, id, p.keyVersion, userId)) === 0) throw conflict("last_manager");
       const r = await c.query("DELETE FROM container_keys WHERE container_id = $1 AND user_id = $2", [id, userId]);
       if (!r.rowCount) throw notFound("member_not_found");
+      // Se il client non completa la rotazione, la farà il prossimo gestore.
+      await c.query("UPDATE containers SET rotation_required = true WHERE id = $1", [id]);
       await audit(c, { actorId: a.id, action: "container.member_removed", targetType: "user", targetId: userId, containerId: id, ip: req.ip });
       return { ok: true, rotationRequired: true };
     });
@@ -236,7 +239,7 @@ export async function containerRoutes(app: FastifyInstance, ctx: Ctx) {
       for (const [itemId, ikEnc] of sent) {
         await c.query("UPDATE items SET ik_enc = $3, ik_key_version = $4 WHERE id = $1 AND container_id = $2", [itemId, id, ikEnc, body.newKeyVersion]);
       }
-      await c.query("UPDATE containers SET key_version = $2, meta_key_enc = $3, updated_at = now() WHERE id = $1", [id, body.newKeyVersion, body.metaKeyEnc]);
+      await c.query("UPDATE containers SET key_version = $2, meta_key_enc = $3, rotation_required = false, updated_at = now() WHERE id = $1", [id, body.newKeyVersion, body.metaKeyEnc]);
       await c.query("DELETE FROM container_keys WHERE container_id = $1 AND key_version < $2", [id, body.newKeyVersion]);
       await audit(c, { actorId: a.id, action: "container.key_rotated", targetType: "container", targetId: id, containerId: id, ip: req.ip, details: { keyVersion: body.newKeyVersion, members: body.grants.length, items: sent.size } });
       return { ok: true, keyVersion: body.newKeyVersion };

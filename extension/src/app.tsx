@@ -6,6 +6,7 @@ import { AuthFrame, Login, MfaSetup, MfaVerify, parseLink, Pending, Recover, Reg
 import { ErrorNote, ToastHost, useLoad } from "./ui/kit";
 import { Clients, ContainerView, go, Shell, useRoute } from "./ui/vault";
 import { Audit, Generator, Import, Org, SettingsPage, Users } from "./ui/admin";
+import { Health, Search } from "./ui/tools";
 
 type Phase =
   | { p: "loading" }
@@ -96,6 +97,18 @@ function Main({ vault }: { vault: Vault }) {
     if (containers.data && !personal) vault.ensurePersonal().then(containers.reload).catch(() => undefined);
   }, [containers.data]);
 
+  // Rotazioni rimaste in sospeso (revoche interrotte, colleghi usciti): le completa il primo gestore.
+  const [rotated, setRotated] = useState<string | null>(null);
+  useEffect(() => {
+    if (!containers.data?.some((c) => c.rotationRequired && c.permission === "manage")) return;
+    vault.completePendingRotations().then((r) => {
+      if (r.done.length) {
+        setRotated(`Chiavi ruotate per ${r.done.length} ${r.done.length === 1 ? "cliente" : "clienti"} dopo la rimozione di un membro: ${r.done.join(", ")}.`);
+        containers.reload();
+      }
+    }).catch(() => undefined);
+  }, [containers.data]);
+
   let page;
   const m = route.match(/^\/c\/([0-9a-f-]{36})$/);
   if (containers.error) page = <ErrorNote error={containers.error} />;
@@ -104,6 +117,8 @@ function Main({ vault }: { vault: Vault }) {
   else if (route === "/personale") page = personal ? <ContainerView vault={vault} id={personal.id} onChanged={containers.reload} /> : <p class="muted">Preparazione…</p>;
   else if (route === "/condivisi") page = <Clients vault={vault} containers={list} reload={containers.reload} shared />;
   else if (route === "/generatore") page = <Generator />;
+  else if (route === "/cerca") page = <Search vault={vault} />;
+  else if (route === "/salute") page = <Health vault={vault} />;
   else if (route === "/import") page = <Import vault={vault} containers={list} onChanged={containers.reload} />;
   else if (route === "/impostazioni") page = <SettingsPage vault={vault} />;
   else if (route === "/admin/utenti" && vault.me.role === "admin") page = <Users vault={vault} />;
@@ -116,6 +131,7 @@ function Main({ vault }: { vault: Vault }) {
       {vault.me.role === "admin" && !vault.me.org && route !== "/admin/org" && (
         <div class="notice warn">Primo passo: <a href="#/admin/org" onClick={() => go("/admin/org")}>inizializza l'organizzazione</a> per poter certificare i colleghi e abilitare il recupero degli account.</div>
       )}
+      {rotated && <div class="notice info">{rotated}</div>}
       {page}
     </Shell>
   );

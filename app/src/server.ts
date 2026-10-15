@@ -66,6 +66,9 @@ export async function buildApp(cfg: Config, db: Db): Promise<FastifyInstance> {
     trustProxy: "127.0.0.1",
   });
 
+  ctx.mailer = createMailer(cfg, (e) => app.log.error({ err: e, smtpHost: cfg.smtp?.host, from: cfg.smtp?.from }, "Invio email non riuscito"));
+  if (!cfg.smtp) app.log.warn("Smarthost non configurato: gli inviti vanno inviati a mano");
+
   app.addContentTypeParser("application/octet-stream", { parseAs: "buffer", bodyLimit: 2 * 1024 * 1024 }, (_r, body, done) => done(null, body));
 
   app.addHook("onSend", async (_req, reply, payload) => {
@@ -117,6 +120,11 @@ export async function buildApp(cfg: Config, db: Db): Promise<FastifyInstance> {
     .type("text/html; charset=utf-8")
     .header("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'")
     .send(landing));
+  const privacy = readFileSync(join(APP_ROOT, "public", "privacy.html"));
+  app.get("/privacy", async (_req, reply) => reply
+    .type("text/html; charset=utf-8")
+    .header("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'")
+    .send(privacy));
   app.get("/download/startcredentials-extension.zip", async (_req, reply) => {
     try {
       const zip = readFileSync(join(APP_ROOT, "public", "startcredentials-extension.zip"));

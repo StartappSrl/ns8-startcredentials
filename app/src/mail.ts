@@ -7,7 +7,7 @@ export interface Mailer {
 }
 
 /** Usa lo smarthost del cluster NethServer quando configurato. */
-export function createMailer(cfg: Config): Mailer {
+export function createMailer(cfg: Config, onError: (e: unknown) => void = () => undefined): Mailer {
   if (!cfg.smtp) return { enabled: false, send: async () => false };
   const t = nodemailer.createTransport({
     host: cfg.smtp.host,
@@ -24,7 +24,8 @@ export function createMailer(cfg: Config): Mailer {
       try {
         await t.sendMail({ from: cfg.smtp!.from, to, subject, text });
         return true;
-      } catch {
+      } catch (e) {
+        onError(e);
         return false;
       }
     },

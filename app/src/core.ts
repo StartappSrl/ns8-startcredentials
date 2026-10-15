@@ -51,7 +51,8 @@ export function loadConfig(env = process.env): Config {
           pass: env.SMTP_PASSWORD || undefined,
           encryption: env.SMTP_ENCRYPTION === "tls" ? "tls" : env.SMTP_ENCRYPTION === "none" ? "none" : "starttls",
           tlsVerify: env.SMTP_TLSVERIFY === "1",
-          from: env.SMTP_FROM || `no-reply@${host ?? "localhost"}`,
+          // Molti provider (Microsoft 365, Gmail) accettano solo il mittente dell'account autenticato.
+          from: env.MAIL_FROM || env.SMTP_FROM || env.SMTP_USERNAME || `no-reply@${host ?? "localhost"}`,
         }
       : undefined,
   };

@@ -31,7 +31,10 @@
     "disabled": "Disattivo",
     "bootstrap_title": "Crea il primo amministratore",
     "bootstrap_description": "Installa l'estensione StartCredentials, collegala a {url} e inserisci il codice di attivazione qui sotto. Smette di funzionare dopo la creazione del primo amministratore. Codice di attivazione: {token}",
-    "instance_url": "Apri StartCredentials"
+    "instance_url": "Apri StartCredentials",
+    "mail_from": "Indirizzo mittente",
+    "mail_from_helper": "Indirizzo usato per gli inviti. Lascia vuoto per usare l'account dello smarthost: molti provider rifiutano mittenti diversi.",
+    "format": "Formato non valido"
   },
   "error": {
     "error": "Errore",

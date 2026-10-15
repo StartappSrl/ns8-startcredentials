@@ -31,7 +31,10 @@
     "disabled": "Disabled",
     "bootstrap_title": "Create the first administrator",
     "bootstrap_description": "Install the StartCredentials browser extension, connect it to {url} and enter the activation code below. It stops working once the first administrator exists. Activation code: {token}",
-    "instance_url": "Open StartCredentials"
+    "instance_url": "Open StartCredentials",
+    "mail_from": "Sender address",
+    "mail_from_helper": "Address used for invitations. Leave empty to use the smarthost account: many providers reject other senders.",
+    "format": "Invalid format"
   },
   "about": {
     "title": "About"

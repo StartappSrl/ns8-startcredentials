@@ -34,6 +34,46 @@ async function orgPublic(c: Tx | Ctx["db"]) {
   return r.rows[0] ? { signPublic: r.rows[0].sign_public as string, recoveryPublic: r.rows[0].recovery_public as string } : null;
 }
 
+const BACKUP_ALPHABET = "ABCDEFGHJKMNPQRSTUVWXYZ23456789";
+
+/** Dieci codici di riserva XXXX-XXXX; sul server restano solo gli HMAC. */
+export function newBackupCodes(ctx: Ctx): { codes: string[]; hashes: string[] } {
+  const codes: string[] = [];
+  for (let i = 0; i < 10; i++) {
+    const b = randomBytes(8);
+    const raw = [...b].map((x) => BACKUP_ALPHABET[x % BACKUP_ALPHABET.length]).join("");
+    codes.push(`${raw.slice(0, 4)}-${raw.slice(4)}`);
+  }
+  return { codes, hashes: codes.map((c) => tokenHash(ctx.cfg, c.replace("-", ""))) };
+}
+
+/**
+ * Verifica un secondo fattore: codice TOTP (anti-riuso) oppure codice di
+ * riserva (consumato). Va chiamata dentro una transazione.
+ */
+export async function verifySecondFactor(c: Tx, ctx: Ctx, userId: string, code: string): Promise<"totp" | "backup" | null> {
+  const u = await c.query("SELECT mfa_secret_enc, mfa_last_counter, mfa_backup_codes FROM users WHERE id = $1 FOR UPDATE", [userId]);
+  const row = u.rows[0];
+  if (!row?.mfa_secret_enc) return null;
+  const clean = code.trim().toUpperCase().replace(/\s/g, "");
+  if (/^\d{6}$/.test(clean)) {
+    const counter = verifyTotp(decryptServerSecret(ctx.cfg, row.mfa_secret_enc), clean, Number(row.mfa_last_counter));
+    if (counter === null) return null;
+    await c.query("UPDATE users SET mfa_last_counter = $2 WHERE id = $1", [userId, counter]);
+    return "totp";
+  }
+  const norm = clean.replace(/-/g, "");
+  if (!/^[A-Z0-9]{8}$/.test(norm)) return null;
+  const hashes: string[] = row.mfa_backup_codes ?? [];
+  const h = tokenHash(ctx.cfg, norm);
+  const idx = hashes.findIndex((x) => safeEqual(x, h));
+  if (idx < 0) return null;
+  hashes.splice(idx, 1);
+  await c.query("UPDATE users SET mfa_backup_codes = $2 WHERE id = $1", [userId, JSON.stringify(hashes)]);
+  await audit(c, { actorId: userId, action: "auth.mfa_backup_used", details: { remaining: hashes.length } });
+  return "backup";
+}
+
 export async function authRoutes(app: FastifyInstance, ctx: Ctx) {
   const { db, cfg } = ctx;
   const limit = (req: FastifyRequest, extra?: string) => {
@@ -199,28 +239,29 @@ export async function authRoutes(app: FastifyInstance, ctx: Ctx) {
       if (!u.rows[0]?.mfa_secret_enc) throw badRequest("mfa_not_started");
       const counter = verifyTotp(decryptServerSecret(cfg, u.rows[0].mfa_secret_enc), code, Number(u.rows[0].mfa_last_counter));
       if (counter === null) throw badRequest("invalid_code");
-      await c.query("UPDATE users SET mfa_enabled = true, mfa_last_counter = $2 WHERE id = $1", [a.id, counter]);
+      const backup = newBackupCodes(ctx);
+      await c.query("UPDATE users SET mfa_enabled = true, mfa_last_counter = $2, mfa_backup_codes = $3 WHERE id = $1", [a.id, counter, JSON.stringify(backup.hashes)]);
       await c.query("UPDATE sessions SET state = 'active' WHERE id = $1", [a.sessionId]);
       await audit(c, { actorId: a.id, action: "auth.mfa_enabled", ip: req.ip });
-      return { state: "active" };
+      return { state: "active", backupCodes: backup.codes };
     });
   });
 
   app.post("/api/v1/auth/mfa/verify", async (req) => {
     const a = requireAuth(req, ["mfa_pending"]);
-    const { code } = z.object({ code: z.string().max(10) }).parse(req.body);
+    const { code } = z.object({ code: z.string().max(20) }).parse(req.body);
     limit(req, `mfa:${a.id}`);
-    return tx(db, async (c) => {
-      const u = await c.query("SELECT mfa_secret_enc, mfa_last_counter FROM users WHERE id = $1 FOR UPDATE", [a.id]);
-      const counter = verifyTotp(decryptServerSecret(cfg, u.rows[0].mfa_secret_enc), code, Number(u.rows[0].mfa_last_counter));
-      if (counter === null) {
-        await audit(c, { actorId: a.id, action: "auth.mfa_failed", ip: req.ip });
-        throw badRequest("invalid_code");
-      }
-      await c.query("UPDATE users SET mfa_last_counter = $2 WHERE id = $1", [a.id, counter]);
+    const ok = await tx(db, async (c) => {
+      const kind = await verifySecondFactor(c, ctx, a.id, code);
+      if (!kind) return false;
       await c.query("UPDATE sessions SET state = 'active' WHERE id = $1", [a.sessionId]);
-      return { state: "active" };
+      return true;
     });
+    if (!ok) {
+      await tx(db, (c) => audit(c, { actorId: a.id, action: "auth.mfa_failed", ip: req.ip }));
+      throw badRequest("invalid_code");
+    }
+    return { state: "active" };
   });
 
   // ------------------------------------------------------------ recupero account

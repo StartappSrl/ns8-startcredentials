@@ -1,6 +1,6 @@
 {
   "name": "@startcredentials/extension",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "license": "GPL-3.0-or-later",
   "type": "module",
@@ -13,7 +13,7 @@
   "dependencies": {
     "@fontsource/jetbrains-mono": "5.1.1",
     "@fontsource/plus-jakarta-sans": "5.1.1",
-    "@startcredentials/client": "0.1.0",
+    "@startcredentials/client": "0.2.0",
     "preact": "10.25.4",
     "qrcode-generator": "1.4.4"
   },

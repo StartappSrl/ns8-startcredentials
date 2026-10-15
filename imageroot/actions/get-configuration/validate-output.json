@@ -23,6 +23,9 @@
         },
         "bootstrap_token": {
             "type": "string"
+        },
+        "mail_from": {
+            "type": "string"
         }
     }
 }

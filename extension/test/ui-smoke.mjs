@@ -137,8 +137,12 @@ try {
   const secret = await waitFor(() => [...w.document.querySelectorAll(".mono")].map((e) => e.textContent).find((t) => /^[A-Z2-7 ]{20,}$/.test(t)), "chiave MFA");
   type("Codice a 6 cifre", totp(secret));
   await click("Attiva");
+  await waitText("Salva i codici di riserva");
+  const backupCodes = [...w.document.querySelectorAll(".share-box")].map((e) => e.textContent);
+  assert.equal(backupCodes.length, 10);
+  await click("Ho salvato i codici");
   await waitText("inizializza l'organizzazione", 60000);
-  step("MFA attivata e cassaforte sbloccata");
+  step("MFA attivata, 10 codici di riserva mostrati, cassaforte sbloccata");
 
   await nav("#/admin/org");
   await waitText("Inizializza l'organizzazione");
@@ -245,6 +249,50 @@ try {
   assert.ok(!(await laura.containers()).some((c) => c.meta.name === "Studio Legale Moretti"));
   await click("Chiudi");
   step("revoca con rotazione della chiave dal dialogo");
+
+  await nav("#/clienti");
+  await nav("#/admin/utenti");
+  await waitText("Laura Bassi");
+  await click("Uscita");
+  await click("Conferma l'uscita");
+  await waitText("Uscita completata");
+  await click("Fatto");
+  await waitText("Sospeso");
+  await assert.rejects(laura.containers());
+  step("uscita di un collega dalla pagina Utenti");
+
+  await nav("#/cerca");
+  await waitFor(() => byLabel("Cerca in tutti i clienti"), "campo di ricerca");
+  await waitText("elementi in");
+  type("Cerca in tutti i clienti", "microsoft");
+  await waitText("Microsoft 365 – amministratore");
+  step("ricerca globale");
+
+  await nav("#/salute");
+  await waitText("Password analizzate");
+  step("rapporto sulla salute delle password");
+
+  await nav("#/impostazioni");
+  await waitText("Codici MFA di riserva");
+  await waitText("10 codici ancora disponibili");
+  await click("Cambia");
+  type("Master password attuale", "una frase lunga per la cassaforte");
+  type("Nuova master password", "nuova frase lunga per la cassaforte");
+  type("Ripeti la nuova master password", "nuova frase lunga per la cassaforte");
+  type("Codice MFA (o codice di riserva)", backupCodes[0]);
+  await click("Cambia password");
+  await waitText("Master password cambiata", 60000);
+  await click("Fatto");
+  await waitText("9 codici ancora disponibili");
+  step("cambio della master password con un codice di riserva");
+
+  await click("Esporta");
+  type("Passphrase dell'export", "passphrase export di prova");
+  type("Ripeti la passphrase", "passphrase export di prova");
+  await click("Esporta");
+  await waitText("Esportati", 60000);
+  await click("Fatto");
+  step("export cifrato");
 
   await nav("#/import");
   await waitText("Il file viene letto e cifrato solo su questo computer");

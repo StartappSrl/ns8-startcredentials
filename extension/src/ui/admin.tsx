@@ -1,8 +1,10 @@
 import { useState } from "preact/hooks";
 import {
-  Container, generatePassword, import1Password, importBitwarden, importCsv, importInto, importKeePass, ImportResult, Vault,
+  ApiError, Container, generatePassword, import1Password, importBitwarden, importCsv, importInto, importKeePass, ImportResult,
+  importStartCredentials, Vault,
 } from "@startcredentials/client";
-import { getSettings, initials, lock, saveSettings, signOut } from "../shared";
+import { download, getSettings, initials, lock, saveSettings, signOut } from "../shared";
+import { BackupCodes } from "./auth";
 import { CopyButton, Dialog, ErrorNote, Meter, useAction, useLoad, useToast } from "./kit";
 import { go } from "./vault";
 
@@ -15,7 +17,9 @@ export function Users({ vault }: { vault: Vault }) {
   const [inviting, setInviting] = useState(false);
   const [certify, setCertify] = useState<AdminUser | null>(null);
   const [recover, setRecover] = useState<AdminUser | null>(null);
-  const { error, run } = useAction();
+  const [mfaReset, setMfaReset] = useState<AdminUser | null>(null);
+  const [offboard, setOffboard] = useState<AdminUser | null>(null);
+  const { busy, error, run } = useAction();
   const toast = useToast();
   const orgReady = !!vault.me.org;
   return (
@@ -60,6 +64,12 @@ export function Users({ vault }: { vault: Vault }) {
                         toast(u.status === "active" ? "Utente sospeso: rimuovilo anche dai clienti condivisi" : "Utente riattivato");
                       })}>{u.status === "active" ? "Sospendi" : "Riattiva"}</button>
                     )}
+                    {u.id !== vault.me.id && u.status === "active" && u.mfaEnabled && (
+                      <button class="btn sm" onClick={() => setMfaReset(u)}>Reimposta MFA</button>
+                    )}
+                    {u.id !== vault.me.id && u.status !== "invited" && (
+                      <button class="btn sm ghost danger" onClick={() => setOffboard(u)}>Uscita</button>
+                    )}
                     {u.id !== vault.me.id && u.status === "active" && (
                       <button class="btn sm ghost" onClick={() => run(async () => {
                         if (u.role === "user") {
@@ -80,7 +90,66 @@ export function Users({ vault }: { vault: Vault }) {
       {inviting && <InviteDialog vault={vault} onClose={() => { setInviting(false); users.reload(); }} />}
       {certify && <CertifyDialog vault={vault} user={certify} onClose={() => { setCertify(null); users.reload(); }} />}
       {recover && <RecoveryDialog vault={vault} user={recover} onClose={() => { setRecover(null); users.reload(); }} />}
+      {mfaReset && (
+        <Dialog title={`Reimpostare l'MFA di ${mfaReset.displayName}?`} onClose={() => setMfaReset(null)}>
+          <p>Usalo solo se la persona ha perso il telefono e i codici di riserva, dopo averne verificato l'identità di persona o al telefono. Tutte le sue sessioni vengono chiuse; al prossimo accesso configurerà di nuovo l'app di autenticazione.</p>
+          <ErrorNote error={error} />
+          <div class="row" style="justify-content:flex-end">
+            <button class="btn" onClick={() => setMfaReset(null)}>Annulla</button>
+            <button class="btn primary" disabled={busy} onClick={() => run(async () => {
+              await vault.resetMfa(mfaReset.id);
+              setMfaReset(null);
+              users.reload();
+              toast("MFA reimpostata");
+            })}>Reimposta MFA</button>
+          </div>
+        </Dialog>
+      )}
+      {offboard && <OffboardDialog vault={vault} user={offboard} onClose={() => { setOffboard(null); users.reload(); }} />}
     </>
+  );
+}
+
+function OffboardDialog({ vault, user, onClose }: { vault: Vault; user: AdminUser; onClose: () => void }) {
+  const [needForce, setNeedForce] = useState<string | null>(null);
+  const [force, setForce] = useState(false);
+  const [result, setResult] = useState<Awaited<ReturnType<Vault["offboard"]>> | null>(null);
+  const { busy, error, run } = useAction();
+  if (result) {
+    const pending = result.containers - result.rotated.length - result.withoutManager.length;
+    return (
+      <Dialog title="Uscita completata" onClose={onClose}>
+        <div class="notice ok">{user.displayName} non ha più accesso a nessun cliente e il suo account è sospeso.</div>
+        <p>Chiavi ruotate subito: {result.rotated.length} {result.rotated.length === 1 ? "cliente" : "clienti"}.</p>
+        {pending > 0 && <p>Altri {pending} clienti di cui non sei gestore verranno ruotati in automatico dal primo gestore che apre la cassaforte.</p>}
+        {result.withoutManager.length > 0 && <div class="notice warn">{result.withoutManager.length} clienti avevano questa persona come unico gestore e ora non sono più gestibili: i membri rimasti li vedono ancora ma nessuno può condividerli.</div>}
+        <p class="small muted">Le password che questa persona ha visto andrebbero comunque cambiate alla fonte: il rapporto «Salute password» aiuta a individuarle per cliente.</p>
+        <div class="row" style="justify-content:flex-end"><button class="btn primary" onClick={onClose}>Fatto</button></div>
+      </Dialog>
+    );
+  }
+  return (
+    <Dialog title={`Uscita di ${user.displayName}`} onClose={onClose}>
+      <p>L'account viene sospeso, le sessioni chiuse e tutte le sue chiavi dei clienti eliminate subito. Le chiavi dei clienti condivisi vengono poi ruotate, così eventuali copie già scaricate diventano inutili.</p>
+      {needForce && (
+        <div class="stack">
+          <div class="notice warn">{needForce}</div>
+          <label class="check"><input type="checkbox" checked={force} onChange={(e) => setForce(e.currentTarget.checked)} />Procedi comunque</label>
+        </div>
+      )}
+      <ErrorNote error={needForce ? null : error} />
+      <div class="row" style="justify-content:flex-end">
+        <button class="btn" onClick={onClose}>Annulla</button>
+        <button class="btn primary" style="background:var(--danger);border-color:var(--danger)" disabled={busy || (!!needForce && !force)} onClick={() => run(async () => {
+          try {
+            setResult(await vault.offboard(user.id, force));
+          } catch (e) {
+            if (e instanceof ApiError && e.code === "containers_without_manager") setNeedForce(e.message);
+            else throw e;
+          }
+        })}>{busy ? "Rotazione delle chiavi…" : "Conferma l'uscita"}</button>
+      </div>
+    </Dialog>
   );
 }
 
@@ -315,6 +384,7 @@ const SOURCES = [
   { id: "1password", label: "1Password (.1pux)", accept: ".1pux" },
   { id: "lastpass", label: "LastPass (CSV)", accept: ".csv" },
   { id: "browser", label: "Chrome / Edge (CSV)", accept: ".csv" },
+  { id: "startcredentials", label: "Export cifrato di StartCredentials", accept: ".json" },
 ] as const;
 
 export function Import({ vault, containers, onChanged }: { vault: Vault; containers: Container[]; onChanged: () => void }) {
@@ -333,11 +403,12 @@ export function Import({ vault, containers, onChanged }: { vault: Vault; contain
     if (!file) throw new Error("Scegli un file");
     const name = file.name.toLowerCase();
     let r: ImportResult;
-    if (name.endsWith(".kdbx")) r = await importKeePass(await file.arrayBuffer(), kdbxPw);
+    if (source === "startcredentials") r = await importStartCredentials(await file.text(), kdbxPw);
+    else if (name.endsWith(".kdbx")) r = await importKeePass(await file.arrayBuffer(), kdbxPw);
     else if (name.endsWith(".1pux")) r = import1Password(new Uint8Array(await file.arrayBuffer()));
     else if (name.endsWith(".json")) r = importBitwarden(await file.text());
     else r = importCsv(await file.text(), source);
-    r.source = source;
+    if (source !== "startcredentials") r.source = source;
     setPreview(r);
   });
 
@@ -369,8 +440,8 @@ export function Import({ vault, containers, onChanged }: { vault: Vault; contain
         <label class="field">File di export
           <input class="input" type="file" accept={SOURCES.find((s) => s.id === source)!.accept} onChange={(e) => { setFile(e.currentTarget.files?.[0] ?? null); setPreview(null); }} />
         </label>
-        {isKdbx && (
-          <label class="field">Password del file KeePass
+        {(isKdbx || source === "startcredentials") && (
+          <label class="field">{source === "startcredentials" ? "Passphrase dell'export" : "Password del file KeePass"}
             <input class="input" type="password" value={kdbxPw} onInput={(e) => setKdbxPw(e.currentTarget.value)} />
           </label>
         )}
@@ -454,6 +525,7 @@ export function SettingsPage({ vault }: { vault: Vault }) {
         <p class="muted">Leggila all'amministratore quando deve certificare la tua chiave.</p>
         <div class="share-box" style="font-size:16px;letter-spacing:1px">{vault.myFingerprint}</div>
       </div>
+      <AccountSecurity vault={vault} />
       <div class="card pad stack" style="max-width:640px">
         <h3>Sicurezza</h3>
         <label class="field">Blocco automatico dopo
@@ -473,5 +545,140 @@ export function SettingsPage({ vault }: { vault: Vault }) {
         </div>
       </div>
     </>
+  );
+}
+
+// ------------------------------------------------------------------ sicurezza dell'account
+
+function AccountSecurity({ vault }: { vault: Vault }) {
+  const mfa = useLoad(() => vault.mfaStatus(), []);
+  const [dialog, setDialog] = useState<"password" | "codes" | "export" | null>(null);
+  return (
+    <div class="card pad stack" style="max-width:640px">
+      <h3>Account</h3>
+      <div class="row between">
+        <div><div style="font-weight:500">Master password</div><div class="small muted">Cambiarla chiude le sessioni sugli altri dispositivi.</div></div>
+        <button class="btn" onClick={() => setDialog("password")}>Cambia</button>
+      </div>
+      <div class="row between">
+        <div>
+          <div style="font-weight:500">Codici MFA di riserva</div>
+          <div class="small muted">{mfa.data ? `${mfa.data.backupCodesRemaining} codici ancora disponibili` : "…"}</div>
+        </div>
+        <button class="btn" onClick={() => setDialog("codes")}>Genera nuovi codici</button>
+      </div>
+      {mfa.data && mfa.data.backupCodesRemaining < 3 && <div class="notice warn">Ti restano pochi codici di riserva: generane di nuovi.</div>}
+      <div class="row between">
+        <div><div style="font-weight:500">Export cifrato</div><div class="small muted">Copia di tutto ciò che puoi leggere, protetta da una passphrase. Gli allegati non sono inclusi.</div></div>
+        <button class="btn" onClick={() => setDialog("export")}>Esporta</button>
+      </div>
+      {dialog === "password" && <ChangePasswordDialog vault={vault} onClose={() => { setDialog(null); mfa.reload(); }} />}
+      {dialog === "codes" && <BackupCodesDialog vault={vault} onClose={() => { setDialog(null); mfa.reload(); }} />}
+      {dialog === "export" && <ExportDialog vault={vault} onClose={() => setDialog(null)} />}
+    </div>
+  );
+}
+
+function ChangePasswordDialog({ vault, onClose }: { vault: Vault; onClose: () => void }) {
+  const [current, setCurrent] = useState("");
+  const [pw, setPw] = useState("");
+  const [pw2, setPw2] = useState("");
+  const [code, setCode] = useState("");
+  const [done, setDone] = useState(false);
+  const { busy, error, setError, run } = useAction();
+  if (done) {
+    return (
+      <Dialog title="Master password cambiata" onClose={onClose}>
+        <div class="notice ok">La nuova master password è attiva. Le sessioni sugli altri dispositivi sono state chiuse.</div>
+        <div class="row" style="justify-content:flex-end"><button class="btn primary" onClick={onClose}>Fatto</button></div>
+      </Dialog>
+    );
+  }
+  return (
+    <Dialog title="Cambia la master password" onClose={onClose}>
+      <form class="stack" onSubmit={(e) => {
+        e.preventDefault();
+        if ([...pw].length < 12) return setError("La nuova master password deve avere almeno 12 caratteri.");
+        if (pw !== pw2) return setError("Le due password non coincidono.");
+        if (pw === current) return setError("La nuova password deve essere diversa da quella attuale.");
+        run(async () => { await vault.changePassword(current, pw, code.trim()); setDone(true); });
+      }}>
+        <label class="field">Master password attuale<input class="input" type="password" autoComplete="current-password" required autoFocus value={current} onInput={(e) => setCurrent(e.currentTarget.value)} /></label>
+        <label class="field">Nuova master password<input class="input" type="password" autoComplete="new-password" required minLength={12} value={pw} onInput={(e) => setPw(e.currentTarget.value)} /></label>
+        <Meter value={pw} />
+        <label class="field">Ripeti la nuova master password<input class="input" type="password" autoComplete="new-password" required value={pw2} onInput={(e) => setPw2(e.currentTarget.value)} /></label>
+        <label class="field">Codice MFA (o codice di riserva)<input class="input mono" autoComplete="one-time-code" required value={code} onInput={(e) => setCode(e.currentTarget.value)} /></label>
+        <ErrorNote error={error} />
+        <div class="row" style="justify-content:flex-end">
+          <button type="button" class="btn" onClick={onClose}>Annulla</button>
+          <button class="btn primary" disabled={busy}>{busy ? "Cifratura delle chiavi…" : "Cambia password"}</button>
+        </div>
+      </form>
+    </Dialog>
+  );
+}
+
+function BackupCodesDialog({ vault, onClose }: { vault: Vault; onClose: () => void }) {
+  const [code, setCode] = useState("");
+  const [codes, setCodes] = useState<string[] | null>(null);
+  const { busy, error, run } = useAction();
+  return (
+    <Dialog title="Nuovi codici di riserva" onClose={onClose}>
+      {codes ? (
+        <div class="stack">
+          <p>I codici precedenti non valgono più. Salva questi fuori da StartCredentials: non verranno mostrati di nuovo.</p>
+          <BackupCodes codes={codes} />
+          <div class="row" style="justify-content:flex-end"><button class="btn primary" onClick={onClose}>Ho salvato i codici</button></div>
+        </div>
+      ) : (
+        <form class="stack" onSubmit={(e) => { e.preventDefault(); run(async () => setCodes(await vault.regenerateBackupCodes(code.trim()))); }}>
+          <label class="field">Codice dall'app di autenticazione<input class="input mono" required autoFocus value={code} onInput={(e) => setCode(e.currentTarget.value)} /></label>
+          <ErrorNote error={error} />
+          <div class="row" style="justify-content:flex-end">
+            <button type="button" class="btn" onClick={onClose}>Annulla</button>
+            <button class="btn primary" disabled={busy}>Genera</button>
+          </div>
+        </form>
+      )}
+    </Dialog>
+  );
+}
+
+function ExportDialog({ vault, onClose }: { vault: Vault; onClose: () => void }) {
+  const [pw, setPw] = useState("");
+  const [pw2, setPw2] = useState("");
+  const [done, setDone] = useState<{ containers: number; items: number; attachmentsSkipped: number } | null>(null);
+  const { busy, error, setError, run } = useAction();
+  return (
+    <Dialog title="Export cifrato" onClose={onClose}>
+      {done ? (
+        <div class="stack">
+          <div class="notice ok">Esportati {done.items} elementi da {done.containers} contenitori.{done.attachmentsSkipped ? ` ${done.attachmentsSkipped} allegati non sono inclusi.` : ""}</div>
+          <p class="small muted">Si reimporta dalla pagina Importa, scegliendo «Export cifrato di StartCredentials». Senza la passphrase il file è illeggibile.</p>
+          <div class="row" style="justify-content:flex-end"><button class="btn primary" onClick={onClose}>Fatto</button></div>
+        </div>
+      ) : (
+        <form class="stack" onSubmit={(e) => {
+          e.preventDefault();
+          if ([...pw].length < 12) return setError("La passphrase deve avere almeno 12 caratteri.");
+          if (pw !== pw2) return setError("Le due passphrase non coincidono.");
+          run(async () => {
+            const r = await vault.exportEncrypted(pw);
+            download(new TextEncoder().encode(r.file), `startcredentials-export-${new Date().toISOString().slice(0, 10)}.json`, "application/json");
+            setDone(r);
+          });
+        }}>
+          <p>Il file contiene tutte le password, gli OTP e le note che puoi leggere, cifrati con questa passphrase. Conservalo come un documento riservato.</p>
+          <label class="field">Passphrase dell'export<input class="input" type="password" autoComplete="new-password" required autoFocus value={pw} onInput={(e) => setPw(e.currentTarget.value)} /></label>
+          <Meter value={pw} />
+          <label class="field">Ripeti la passphrase<input class="input" type="password" autoComplete="new-password" required value={pw2} onInput={(e) => setPw2(e.currentTarget.value)} /></label>
+          <ErrorNote error={error} />
+          <div class="row" style="justify-content:flex-end">
+            <button type="button" class="btn" onClick={onClose}>Annulla</button>
+            <button class="btn primary" disabled={busy}>{busy ? "Cifratura…" : "Esporta"}</button>
+          </div>
+        </form>
+      )}
+    </Dialog>
   );
 }
