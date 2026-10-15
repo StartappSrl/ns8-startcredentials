@@ -2,6 +2,7 @@
  * Rapporto sulla salute delle password, calcolato solo sul client.
  */
 import type { Container, Item } from "./vault.js";
+import { effectiveTotpUri } from "./totp-fields.js";
 
 export function estimateBits(pw: string): number {
   let pool = 0;
@@ -38,6 +39,6 @@ export function passwordHealth(entries: HealthEntry[], opts: { oldDays?: number;
     reused: [...byPw.values()].filter((l) => l.length > 1),
     old: withPw.filter((e) => now - new Date(e.item.updatedAt).getTime() > oldMs),
     // Siti amministrativi senza secondo fattore salvato: da valutare, non per forza un problema.
-    missingOtp: withPw.filter((e) => !e.item.data.totpUri && (e.item.data.urls ?? []).some((u) => /admin|portal|console|login/i.test(u))),
+    missingOtp: withPw.filter((e) => !effectiveTotpUri(e.item.data) && (e.item.data.urls ?? []).some((u) => /admin|portal|console|login/i.test(u))),
   };
 }

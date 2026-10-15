@@ -1,6 +1,6 @@
 import { useState } from "preact/hooks";
 import {
-  ApiError, ClientImportSummary, Container, generatePassword, import1Password, importAsClients, importBitwarden, importCsv, importInto,
+  ApiError, ClientImportSummary, Container, effectiveTotpUri, generatePassword, import1Password, importAsClients, importBitwarden, importCsv, importInto,
   importKeePass, ImportResult, importStartCredentials, planClientImport, Vault,
 } from "@startcredentials/client";
 import { disableInlineIcon, download, enableInlineIcon, getSettings, initials, lock, saveSettings, signOut } from "../shared";
@@ -498,7 +498,7 @@ export function Import({ vault, containers, onChanged }: { vault: Vault; contain
         {preview && (
           <div class="notice info">
             Trovati {preview.items.length} elementi e {preview.folders.length} cartelle
-            {preview.items.filter((i) => i.data.totpUri).length ? `, di cui ${preview.items.filter((i) => i.data.totpUri).length} con OTP` : ""}.
+            {preview.items.filter((i) => effectiveTotpUri(i.data)).length ? `, di cui ${preview.items.filter((i) => effectiveTotpUri(i.data)).length} con OTP` : ""}.
             {preview.skipped.length > 0 && ` ${preview.skipped.length} avvisi: ${preview.skipped.slice(0, 3).map((s) => `${s.name} (${s.reason})`).join("; ")}.`}
           </div>
         )}

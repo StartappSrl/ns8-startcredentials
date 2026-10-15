@@ -5,6 +5,7 @@
 import { unzipSync } from "fflate";
 import type { ItemData } from "@startcredentials/crypto";
 import type { Container, Vault } from "../vault.js";
+import { KEEPASS_TOTP_FIELDS, keepassTotpUri } from "../totp-fields.js";
 
 export type ImportSource = "csv" | "bitwarden" | "1password" | "keepass";
 
@@ -268,7 +269,7 @@ export async function importKeePass(data: ArrayBuffer, password: string, keyFile
   const res: ImportResult = { source: "keepass", folders: [], items: [], skipped: [] };
   const recycle = db.meta.recycleBinUuid?.id;
   const text = (v: unknown) => (v instanceof kdbxweb.ProtectedValue ? v.getText() : typeof v === "string" ? v : "");
-  const STANDARD = new Set(["Title", "UserName", "Password", "URL", "Notes", "otp", "TOTP Seed", "TOTP Settings"]);
+  const STANDARD = new Set(["Title", "UserName", "Password", "URL", "Notes", "otp", "TOTP Seed", "TOTP Settings", ...KEEPASS_TOTP_FIELDS]);
 
   const walk = (group: InstanceType<typeof kdbxweb.KdbxGroup>, path: string[]) => {
     if (recycle && group.uuid.id === recycle) return;
@@ -276,7 +277,8 @@ export async function importKeePass(data: ArrayBuffer, password: string, keyFile
     for (const e of group.entries) {
       const f = e.fields;
       const name = text(f.get("Title")) || "Senza nome";
-      const otp = text(f.get("otp")) || text(f.get("TOTP Seed"));
+      const otp = text(f.get("otp")) || text(f.get("TOTP Seed"))
+        || keepassTotpUri((n) => (f.has(n) ? text(f.get(n)) : undefined), name) || "";
       const fields: NonNullable<ItemData["fields"]> = [];
       for (const [k, v] of f) {
         if (!STANDARD.has(k)) fields.push({ label: k, value: text(v), secret: v instanceof kdbxweb.ProtectedValue });

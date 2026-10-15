@@ -1,6 +1,6 @@
 import { render } from "preact";
 import { useEffect, useState } from "preact/hooks";
-import { Container, generatePassword, Item, normalizeHost, ready, Vault } from "@startcredentials/client";
+import { Container, effectiveTotpUri, generatePassword, Item, normalizeHost, ready, Vault } from "@startcredentials/client";
 import { api, currentVault, getSettings, hasToken, lock } from "./shared";
 import { fillTab } from "./fill";
 import { Brand, CopyButton, ErrorNote, OtpCode, ToastHost, useAction, useToast } from "./ui/kit";
@@ -134,7 +134,7 @@ function Unlocked({ vault }: { vault: Vault }) {
                 <div style="font-weight:500" class="ellipsis">{d.name}</div>
                 <div class="small muted ellipsis">{hit.container.kind === "personal" ? "Area personale" : hit.container.meta.name}{d.username ? ` · ${d.username}` : ""}</div>
               </div>
-              {d.totpUri && <OtpCode uri={d.totpUri} compact onCopy={() => vault.report("item.totp_copy", hit.container.id, hit.item.id)} />}
+              {effectiveTotpUri(d) && <OtpCode uri={effectiveTotpUri(d)!} compact onCopy={() => vault.report("item.totp_copy", hit.container.id, hit.item.id)} />}
               <div class="row" style="gap:6px">
                 {isMatch && (d.password || d.username) && <button class="btn primary sm grow" onClick={() => fill(hit)}>Compila</button>}
                 {d.username && <CopyButton value={d.username} label="Copia utente" />}

@@ -1,6 +1,6 @@
 import { ComponentChildren } from "preact";
 import { useEffect, useMemo, useState } from "preact/hooks";
-import { Container, DirectoryUser, Folder, generatePassword, Item, ItemData, Permission, Vault } from "@startcredentials/client";
+import { Container, DirectoryUser, effectiveTotpUri, Folder, generatePassword, Item, ItemData, KEEPASS_TOTP_FIELDS, Permission, Vault } from "@startcredentials/client";
 import { download, initials, lock, relTime, signOut, tint } from "../shared";
 import { Brand, CopyButton, Dialog, ErrorNote, Meter, OtpCode, Secret, useAction, useLoad, useToast } from "./kit";
 
@@ -184,7 +184,7 @@ export function ContainerView({ vault, id, onChanged }: { vault: Vault; id: stri
   const visible = useMemo(() => {
     let l = items.data ?? [];
     if (tab === "login") l = l.filter((i) => i.type === "login");
-    if (tab === "totp") l = l.filter((i) => !!i.data.totpUri);
+    if (tab === "totp") l = l.filter((i) => !!effectiveTotpUri(i.data));
     if (tab === "note") l = l.filter((i) => i.type === "note");
     if (tab === "files") l = l.filter((i) => i.attachments.length > 0);
     if (q) {
@@ -265,12 +265,12 @@ export function ContainerView({ vault, id, onChanged }: { vault: Vault; id: stri
               )}
               {g.items.map((i) => (
                 <button class={`item-row${i.id === selected ? " on" : ""}`} onClick={() => setSelected(i.id)}>
-                  <span class="kind">{i.data.totpUri && i.type === "login" ? "PWD" : TYPE_TAG[i.type]}</span>
+                  <span class="kind">{TYPE_TAG[i.type]}</span>
                   <span class="grow">
                     <span class="ellipsis" style="display:block;font-weight:500">{i.data.name}</span>
                     <span class="ellipsis small muted" style="display:block">{i.data.username || (i.data.urls?.[0] ?? TYPE_LABEL[i.type])}</span>
                   </span>
-                  <span class="small muted">{[i.data.totpUri && "OTP", i.attachments.length && `${i.attachments.length} file`].filter(Boolean).join(" · ")}</span>
+                  <span class="small muted">{[effectiveTotpUri(i.data) && "OTP", i.attachments.length && `${i.attachments.length} file`].filter(Boolean).join(" · ")}</span>
                 </button>
               ))}
             </>
@@ -376,14 +376,14 @@ function ItemDetail({ vault, item, canWrite, folders, onEdit, onChanged, onDelet
           <Meter value={d.password} />
         </div>
       )}
-      {d.totpUri && <OtpCode uri={d.totpUri} onCopy={() => report("item.totp_copy")} />}
+      {effectiveTotpUri(d) && <OtpCode uri={effectiveTotpUri(d)!} onCopy={() => report("item.totp_copy")} />}
       {d.notes && (
         <div class="stack" style="gap:6px">
           <span class="small muted">Note</span>
           <div style="white-space:pre-wrap;word-break:break-word" class="file">{d.notes}</div>
         </div>
       )}
-      {(d.fields ?? []).map((f) => (
+      {(d.fields ?? []).filter((f) => !(effectiveTotpUri(d) && KEEPASS_TOTP_FIELDS.includes(f.label))).map((f) => (
         <div class="stack" style="gap:6px">
           <span class="small muted">{f.label}</span>
           {f.secret ? <Secret value={f.value} onReveal={() => report("item.reveal")} onCopy={() => report("item.copy")} /> : (
@@ -464,10 +464,12 @@ function ItemEditor({ vault, containerId, folders, item, onClose, onSaved }: {
   const [username, setUsername] = useState(d?.username ?? "");
   const [password, setPassword] = useState(d?.password ?? "");
   const [urls, setUrls] = useState((d?.urls ?? []).join("\n"));
-  const [totp, setTotp] = useState(d?.totpUri ?? "");
+  // Gli elementi importati con i campi OTP di KeePass vengono convertiti al salvataggio.
+  const legacyTotp = !!d && !d.totpUri && !!effectiveTotpUri(d);
+  const [totp, setTotp] = useState(d ? effectiveTotpUri(d) ?? "" : "");
   const [notes, setNotes] = useState(d?.notes ?? "");
   const [folderId, setFolderId] = useState(item?.folderId ?? "");
-  const [fields, setFields] = useState(d?.fields ?? []);
+  const [fields, setFields] = useState((d?.fields ?? []).filter((f) => !legacyTotp || !KEEPASS_TOTP_FIELDS.includes(f.label)));
   const { busy, error, setError, run } = useAction();
 
   const save = (e: Event) => {

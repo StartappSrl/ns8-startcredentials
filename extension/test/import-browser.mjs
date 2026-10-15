@@ -84,6 +84,33 @@ assert.equal((await lib.importKeePass(withKey, "", keyFile.buffer.slice(keyFile.
 await assert.rejects(lib.importKeePass(withKey, ""), /protetto: inserisci la password o il file chiave/);
 console.log("✓ KeePass senza password, con password vuota e con file chiave");
 
+// Campi OTP nativi di KeePass (export KDBX di Passbolt).
+{
+  const d = kdbxweb.Kdbx.create(new kdbxweb.Credentials(null), "Passbolt");
+  const e1 = d.createEntry(d.getDefaultGroup());
+  e1.fields.set("Title", "Portale SHA1");
+  e1.fields.set("TimeOtp-Secret-Base32", kdbxweb.ProtectedValue.fromString("GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ"));
+  const e2 = d.createEntry(d.getDefaultGroup());
+  e2.fields.set("Title", "Portale SHA256");
+  // "12345678901234567890123456789012" in esadecimale, come la variante Hex di KeePass
+  e2.fields.set("TimeOtp-Secret-Hex", kdbxweb.ProtectedValue.fromString(Buffer.from("12345678901234567890123456789012").toString("hex")));
+  e2.fields.set("TimeOtp-Algorithm", "HMAC-SHA-256");
+  e2.fields.set("TimeOtp-Length", "8");
+  e2.fields.set("TimeOtp-Period", "30");
+  const r = await lib.importKeePass(await d.save(), "");
+  const p1 = r.items.find((i) => i.data.name === "Portale SHA1").data;
+  const p2 = r.items.find((i) => i.data.name === "Portale SHA256").data;
+  assert.ok(p1.totpUri?.startsWith("otpauth://totp/"));
+  assert.ok(!(p1.fields ?? []).some((f) => f.label.startsWith("TimeOtp")), "i campi TimeOtp non restano come campi aggiuntivi");
+  // Vettori RFC 6238 a t=59 s: SHA-1 (6 cifre) 287082, SHA-256 (8 cifre) 46119246
+  assert.equal((await lib.Vault.totp(p1.totpUri, 59_000)).code, "287082");
+  assert.equal((await lib.Vault.totp(p2.totpUri, 59_000)).code, "46119246");
+  // Elemento importato con la versione precedente: OTP rimasto solo nei campi aggiuntivi.
+  const legacy = { type: "login", name: "Vecchio import", fields: [{ label: "TimeOtp-Secret-Base32", value: "GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ", secret: true }] };
+  assert.equal((await lib.Vault.totp(lib.effectiveTotpUri(legacy), 59_000)).code, "287082");
+  console.log("✓ OTP dai campi KeePass (TimeOtp-*): codici corretti secondo RFC 6238, anche per elementi già importati");
+}
+
 // 3. CSV in formato Passbolt (KeePass CSV) e LastPass.
 const pb = lib.importCsv('"Group","Title","Username","Password","URL","Notes","TOTP"\n"Clienti/Rossi","PEC","rossi@pec.it","p1","https://pec.it","","GEZDGNBVGY3TQOJQ"\n', "passbolt");
 assert.equal(pb.items[0].data.password, "p1");
