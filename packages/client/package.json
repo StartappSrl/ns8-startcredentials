@@ -1,6 +1,6 @@
 {
   "name": "@startcredentials/client",
-  "version": "0.3.4",
+  "version": "0.3.5",
   "description": "SDK client di StartCredentials: API, flussi crittografici e import",
   "license": "GPL-3.0-or-later",
   "type": "module",
@@ -12,7 +12,7 @@
   },
   "dependencies": {
     "@serenity-kit/opaque": "1.1.0",
-    "@startcredentials/crypto": "0.3.4",
+    "@startcredentials/crypto": "0.3.5",
     "fflate": "0.8.2",
     "hash-wasm": "4.12.0",
     "kdbxweb": "2.1.1",

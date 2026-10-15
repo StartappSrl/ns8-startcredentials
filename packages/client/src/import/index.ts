@@ -4,7 +4,7 @@
  */
 import { unzipSync } from "fflate";
 import type { ItemData } from "@startcredentials/crypto";
-import type { Vault } from "../vault.js";
+import type { Container, Vault } from "../vault.js";
 
 export type ImportSource = "csv" | "bitwarden" | "1password" | "keepass";
 
@@ -328,4 +328,135 @@ export async function importStartCredentials(file: string, passphrase: string): 
 /** Cifra e carica il risultato di un import (lotti da 500 elementi). */
 export async function importInto(vault: Vault, containerId: string, r: ImportResult, onProgress?: (done: number, total: number) => void): Promise<number> {
   return vault.bulkCreate(containerId, r.source, r.folders, r.items, onProgress);
+}
+
+// ------------------------------------------------------------------ un cliente per cartella principale
+
+export interface ClientImportPlan {
+  clients: {
+    name: string;
+    existing: Container | null;
+    /** true se esiste un cliente omonimo su cui non hai il permesso di scrittura. */
+    readOnly: boolean;
+    folders: ImportedFolder[];
+    items: ImportedItem[];
+  }[];
+  /** Elementi fuori da ogni cartella. */
+  loose: ImportedItem[];
+}
+
+const norm = (s: string) => s.trim().toLocaleLowerCase("it");
+
+/**
+ * Prepara l'import "un cliente per ogni cartella principale": ogni cartella
+ * di primo livello diventa (o ritrova) un cliente, le sottocartelle restano
+ * cartelle al suo interno.
+ */
+export function planClientImport(r: ImportResult, containers: Container[]): ClientImportPlan {
+  const byKey = new Map(r.folders.map((f) => [f.key, f]));
+  const topOf = (key: string): ImportedFolder => {
+    let f = byKey.get(key)!;
+    while (f.parentKey) f = byKey.get(f.parentKey)!;
+    return f;
+  };
+  const tops = r.folders.filter((f) => !f.parentKey);
+  // Cartelle principali omonime (es. "Rossi" e "rossi") confluiscono nello stesso cliente.
+  const groups = new Map<string, { name: string; topKeys: Set<string> }>();
+  for (const t of tops) {
+    const k = norm(t.name);
+    if (!groups.has(k)) groups.set(k, { name: t.name.trim(), topKeys: new Set() });
+    groups.get(k)!.topKeys.add(t.key);
+  }
+  const clients: ClientImportPlan["clients"] = [];
+  for (const [k, g] of groups) {
+    const existingAny = containers.filter((c) => c.kind === "client" && norm(c.meta.name) === k);
+    const writable = existingAny.find((c) => c.permission !== "read") ?? null;
+    const folders = r.folders
+      .filter((f) => f.parentKey && g.topKeys.has(topOf(f.key).key))
+      .map((f) => ({ ...f, parentKey: g.topKeys.has(f.parentKey!) ? null : f.parentKey }));
+    const items = r.items
+      .filter((i) => i.folderKey && g.topKeys.has(topOf(i.folderKey).key))
+      .map((i) => ({ ...i, folderKey: g.topKeys.has(i.folderKey!) ? null : i.folderKey }));
+    clients.push({ name: g.name, existing: writable, readOnly: !writable && existingAny.length > 0, folders, items });
+  }
+  clients.sort((a, b) => a.name.localeCompare(b.name, "it"));
+  return { clients, loose: r.items.filter((i) => !i.folderKey) };
+}
+
+export interface ClientImportSummary {
+  created: string[];
+  reused: string[];
+  imported: number;
+  loose: number;
+  /** Elementi identici a quelli già presenti nella destinazione, non reimportati. */
+  duplicates: number;
+  skipped: { name: string; reason: string }[];
+}
+
+/** Esegue il piano: crea i clienti mancanti e importa in ciascuno le sue credenziali. */
+export async function importAsClients(
+  vault: Vault, r: ImportResult, opts: { looseContainerId?: string | null; onProgress?: (text: string) => void } = {},
+): Promise<ClientImportSummary> {
+  const plan = planClientImport(r, await vault.containers());
+  const out: ClientImportSummary = { created: [], reused: [], imported: 0, loose: 0, duplicates: 0, skipped: [] };
+  const sig = (d: ItemData) => JSON.stringify([norm(d.name), d.username ?? "", d.password ?? "", d.totpUri ?? ""]);
+  /** Toglie gli elementi già presenti nella destinazione (stesso nome, utente, password e OTP). */
+  const withoutDuplicates = async (containerId: string, items: ImportedItem[]) => {
+    const existing = new Set((await vault.items(containerId)).map((i) => sig(i.data)));
+    const keep = items.filter((i) => !existing.has(sig(i.data)));
+    out.duplicates += items.length - keep.length;
+    return keep;
+  };
+  for (const c of plan.clients) {
+    if (c.readOnly) {
+      out.skipped.push({ name: c.name, reason: `${c.items.length} elementi non importati: esiste già un cliente con questo nome ma hai solo la lettura` });
+      continue;
+    }
+    if (!c.items.length && !c.folders.length) continue;
+    opts.onProgress?.(`Cliente ${c.name}…`);
+    let id = c.existing?.id;
+    if (!id) {
+      id = await vault.createContainer({ name: c.name });
+      out.created.push(c.name);
+      out.imported += await vault.bulkCreate(id, r.source, c.folders, c.items);
+    } else {
+      out.reused.push(c.name);
+      // Le cartelle omonime già presenti nel cliente vengono riusate.
+      const detail = await vault.container(id);
+      const items = await withoutDuplicates(id, c.items);
+      const reuse = new Map<string, string>();
+      const newFolders: ImportedFolder[] = [];
+      for (const f of c.folders) {
+        const parentExisting = f.parentKey ? reuse.get(f.parentKey) ?? null : null;
+        const match = detail.folders.find((x) => norm(x.name) === norm(f.name) && x.parentId === (f.parentKey ? parentExisting : null) && (!f.parentKey || parentExisting));
+        if (match) reuse.set(f.key, match.id);
+        else newFolders.push(f);
+      }
+      if (reuse.size) {
+        // Cartelle già esistenti: creiamo solo quelle nuove, poi spostiamo gli elementi negli id reali.
+        const created = new Map<string, string>();
+        for (const f of newFolders) {
+          const parent = f.parentKey ? reuse.get(f.parentKey) ?? created.get(f.parentKey) ?? null : null;
+          created.set(f.key, await vault.createFolder(id, f.name, parent));
+        }
+        for (const it of items) {
+          const target = it.folderKey ? reuse.get(it.folderKey) ?? created.get(it.folderKey) ?? null : null;
+          await vault.createItem(id, it.data, target);
+          out.imported++;
+        }
+      } else {
+        out.imported += await vault.bulkCreate(id, r.source, c.folders, items);
+      }
+    }
+  }
+  if (plan.loose.length) {
+    if (opts.looseContainerId) {
+      opts.onProgress?.("Credenziali senza cartella…");
+      out.loose = await vault.bulkCreate(opts.looseContainerId, r.source, [], await withoutDuplicates(opts.looseContainerId, plan.loose));
+      out.imported += out.loose;
+    } else {
+      out.skipped.push({ name: "Senza cartella", reason: `${plan.loose.length} elementi fuori da ogni cartella non importati` });
+    }
+  }
+  return out;
 }

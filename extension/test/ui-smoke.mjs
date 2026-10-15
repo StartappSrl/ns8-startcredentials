@@ -40,6 +40,10 @@ Object.defineProperty(globalThis, "navigator", { value: w.navigator, configurabl
 let clipboard = "";
 Object.defineProperty(w.navigator, "clipboard", { value: { writeText: async (t) => { clipboard = t; } } });
 w.URL.createObjectURL = () => "blob:x";
+// jsdom non implementa Blob.text()/arrayBuffer(), presenti in tutti i browser moderni.
+const readAs = (blob, how) => new Promise((res, rej) => { const fr = new w.FileReader(); fr.onload = () => res(fr.result); fr.onerror = rej; fr[how](blob); });
+w.Blob.prototype.text ??= function () { return readAs(this, "readAsText"); };
+w.Blob.prototype.arrayBuffer ??= function () { return readAs(this, "readAsArrayBuffer"); };
 w.URL.revokeObjectURL = () => undefined;
 
 const area = () => {
@@ -337,7 +341,24 @@ try {
 
   await nav("#/import");
   await waitText("Il file viene letto e cifrato solo su questo computer");
-  step("pagina di import");
+  const csv = "Group,Title,Username,Password,URL,Notes\n" +
+    "Studio Legale Moretti/Server,NAS,admin,nas-1,https://nas.moretti.it,\n" +
+    "Officine Ciampino,Firewall,admin,fw-1,https://fw.ciampino.it,\n" +
+    ",Senza cartella,me,sc-1,,\n";
+  const fileInput = byLabel("File di export");
+  Object.defineProperty(fileInput, "files", { value: [new w.File([csv], "passbolt.csv", { type: "text/csv" })], configurable: true });
+  fileInput.dispatchEvent(new w.Event("change", { bubbles: true }));
+  await click("Analizza il file");
+  await waitText("Trovati 3 elementi");
+  await waitText("Officine Ciampino");
+  assert.ok(text().includes("Nuovo") && text().includes("Esistente"), "anteprima con clienti nuovi ed esistenti");
+  await click("Importa in 2 clienti");
+  await waitText("Import completato", 60000);
+  assert.ok(text().includes("Clienti creati (1): Officine Ciampino"));
+  assert.ok(text().includes("Clienti già esistenti aggiornati (1): Studio Legale Moretti"));
+  await click("Vai ai clienti");
+  await waitText("Officine Ciampino");
+  step("import con un cliente per ogni cartella principale");
 
   await nav("#/admin/audit");
   await waitText("Registro attività");

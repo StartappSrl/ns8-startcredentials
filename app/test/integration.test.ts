@@ -10,7 +10,7 @@ import { join } from "node:path";
 import { randomBytes } from "node:crypto";
 import type { FastifyInstance } from "fastify";
 import {
-  Api, ApiError, completeRecovery, decryptExport, enableMfa, importBitwarden, importCsv, importInto, importStartCredentials,
+  Api, ApiError, completeRecovery, decryptExport, enableMfa, importAsClients, importBitwarden, importCsv, importInto, importStartCredentials,
   login, passwordHealth, register, SecurityError, serverStatus, setupMfa, Vault, verifyMfa,
 } from "@startcredentials/client";
 import { Config, createPool, Db, migrate, totpAt } from "../src/core.js";
@@ -415,6 +415,52 @@ describe("StartCredentials end-to-end", () => {
     assert.ok((await sara.containers()).some((c) => c.id === other && c.permission === "read"));
     // Solo gli amministratori gestiscono i gruppi.
     await rejects(sara.createGroup("Abusivo"), "security");
+  });
+
+  test("import con un cliente per ogni cartella principale", async () => {
+    const marco: Vault = state.marco;
+    const sara: Vault = state.sara;
+    const rossi = await marco.createContainer({ name: "Ferramenta Rossi" });
+    await marco.createFolder(rossi, "Server");
+    // Cliente omonimo su cui Marco ha solo la lettura.
+    const ro = await sara.createContainer({ name: "Solo Lettura Spa" });
+    await sara.share(ro, state.marcoId, "read");
+    const csv = [
+      "name,username,password,url,notes,folder",
+      "NAS,admin,nas-1,https://nas.rossi.it,,Ferramenta Rossi/Server",
+      "Router,root,router-1,https://router.rossi.it,,ferramenta rossi",
+      "PEC,bianchi@pec.it,pec-1,https://pec.it,,Bianchi Srl/Posta/PEC",
+      "Gestionale,ro,ro-1,,,Solo lettura SPA",
+      "Senza cartella,me,sc-1,,,",
+    ].join("\n");
+    const personal = await marco.ensurePersonal();
+    const first = await importAsClients(marco, importCsv(csv, "passbolt"), { looseContainerId: personal });
+    assert.deepEqual(first.created, ["Bianchi Srl"]);
+    assert.deepEqual(first.reused, ["Ferramenta Rossi"]);
+    assert.equal(first.imported, 4);
+    assert.equal(first.loose, 1);
+    assert.ok(first.skipped.some((x) => x.name === "Solo lettura SPA" && /sola lettura|solo la lettura/.test(x.reason)));
+
+    const rossiDetail = await marco.container(rossi);
+    assert.deepEqual(rossiDetail.folders.map((f) => f.name), ["Server"], "la cartella Server esistente va riusata");
+    const rossiItems = await marco.items(rossi);
+    assert.equal(rossiItems.find((i) => i.data.name === "NAS")!.folderId, rossiDetail.folders[0]!.id);
+    assert.equal(rossiItems.find((i) => i.data.name === "Router")!.folderId, null);
+
+    const bianchi = (await marco.containers()).find((c) => c.meta.name === "Bianchi Srl")!;
+    const bd = await marco.container(bianchi.id);
+    const posta = bd.folders.find((f) => f.name === "Posta")!;
+    assert.equal(bd.folders.find((f) => f.name === "PEC")!.parentId, posta.id);
+    assert.equal((await marco.items(bianchi.id))[0]!.data.password, "pec-1");
+    assert.ok((await marco.items(personal)).some((i) => i.data.name === "Senza cartella"));
+    assert.equal((await sara.items(ro)).length, 0, "nessun elemento nel cliente in sola lettura");
+
+    // Secondo import identico: niente doppioni, nessun cliente nuovo.
+    const again = await importAsClients(marco, importCsv(csv, "passbolt"), { looseContainerId: personal });
+    assert.deepEqual(again.created, []);
+    assert.equal(again.imported, 0);
+    assert.equal(again.duplicates, 4);
+    assert.equal((await marco.items(rossi)).length, 2);
   });
 
   test("sospensione e registro di audit a prova di manomissione", async () => {

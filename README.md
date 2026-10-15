@@ -65,7 +65,8 @@ personale; condivisione con colleghi e **gruppi** (permessi di lettura, modifica
 e gestione); revoca con rotazione delle chiavi; icona di compilazione nei campi
 di accesso (facoltativa); ricerca globale; rapporto sulla salute delle
 password; import da Passbolt, KeePass, Bitwarden, 1Password, LastPass, Chrome/Edge
-e dall'export cifrato di StartCredentials; export cifrato; registro di audit.
+e dall'export cifrato di StartCredentials, anche creando un cliente per ogni
+cartella principale del file (senza duplicare gli elementi già presenti); export cifrato; registro di audit.
 
 Gruppi: ogni gruppo ha una coppia di chiavi certificata dall'organizzazione;
 un cliente condiviso con un gruppo è visibile a tutti i suoi membri. Chi esce
@@ -100,9 +101,9 @@ Serve Node.js 22 e un PostgreSQL di test (`TEST_DATABASE_URL`, predefinito `post
 npm ci
 npm test -w packages/crypto          # 14 test del core crittografico
 npm run build -w packages/client
-npm test -w app                      # 15 scenari end-to-end su server e database reali
+npm test -w app                      # 16 scenari end-to-end su server e database reali
 npm run build -w extension           # produce extension/startcredentials-extension.zip
-npm run test:ui -w extension         # 24 passaggi dell'interfaccia (jsdom + server reale)
+npm run test:ui -w extension         # 25 passaggi dell'interfaccia (jsdom + server reale)
 npm run test:import -w extension     # import con il pacchetto per browser (KeePass reale, CSV, 1Password)
 npm run test:inline -w extension     # icona nei campi di accesso
 ./build-images.sh                    # immagini del modulo e dell'applicazione (buildah)

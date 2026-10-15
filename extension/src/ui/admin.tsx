@@ -1,7 +1,7 @@
 import { useState } from "preact/hooks";
 import {
-  ApiError, Container, generatePassword, import1Password, importBitwarden, importCsv, importInto, importKeePass, ImportResult,
-  importStartCredentials, Vault,
+  ApiError, ClientImportSummary, Container, generatePassword, import1Password, importAsClients, importBitwarden, importCsv, importInto,
+  importKeePass, ImportResult, importStartCredentials, planClientImport, Vault,
 } from "@startcredentials/client";
 import { disableInlineIcon, download, enableInlineIcon, getSettings, initials, lock, saveSettings, signOut } from "../shared";
 import { BackupCodes } from "./auth";
@@ -389,16 +389,21 @@ const SOURCES = [
 
 export function Import({ vault, containers, onChanged }: { vault: Vault; containers: Container[]; onChanged: () => void }) {
   const writable = containers.filter((c) => c.permission !== "read" && c.kind !== "org");
+  const personal = containers.find((c) => c.kind === "personal");
+  const [mode, setMode] = useState<"clients" | "single">("clients");
   const [target, setTarget] = useState(writable[0]?.id ?? "");
+  const [looseTarget, setLooseTarget] = useState(personal?.id ?? "");
   const [source, setSource] = useState<(typeof SOURCES)[number]["id"]>("passbolt");
   const [file, setFile] = useState<File | null>(null);
   const [kdbxPw, setKdbxPw] = useState("");
   const [keyFile, setKeyFile] = useState<File | null>(null);
   const [preview, setPreview] = useState<ImportResult | null>(null);
   const [progress, setProgress] = useState<string | null>(null);
-  const [done, setDone] = useState<number | null>(null);
+  const [done, setDone] = useState<{ single?: number; clients?: ClientImportSummary } | null>(null);
   const { busy, error, run } = useAction();
   const isKdbx = file?.name.toLowerCase().endsWith(".kdbx");
+  const plan = preview ? planClientImport(preview, containers) : null;
+  const topFolders = preview?.folders.filter((f) => !f.parentKey).length ?? 0;
 
   const analyse = () => run(async () => {
     if (!file) throw new Error("Scegli un file");
@@ -410,16 +415,30 @@ export function Import({ vault, containers, onChanged }: { vault: Vault; contain
     else if (name.endsWith(".json")) r = importBitwarden(await file.text());
     else r = importCsv(await file.text(), source);
     if (source !== "startcredentials") r.source = source;
+    // Senza cartelle principali la modalità per cliente non ha senso.
+    if (!r.folders.some((f) => !f.parentKey)) setMode("single");
     setPreview(r);
   });
 
-  if (done !== null) {
+  if (done) {
+    const c = done.clients;
     return (
-      <div class="card pad stack" style="max-width:640px">
+      <div class="card pad stack" style="max-width:680px">
         <h1>Import completato</h1>
-        <p>{done} elementi cifrati e caricati. Elimina il file di export dal computer: contiene le password in chiaro.</p>
+        {c ? (
+          <>
+            <p>{c.imported} elementi cifrati e caricati.</p>
+            {c.created.length > 0 && <p><b>Clienti creati ({c.created.length}):</b> {c.created.join(", ")}</p>}
+            {c.reused.length > 0 && <p><b>Clienti già esistenti aggiornati ({c.reused.length}):</b> {c.reused.join(", ")}</p>}
+            {c.loose > 0 && <p>{c.loose} elementi senza cartella importati in «{containers.find((x) => x.id === looseTarget)?.kind === "personal" ? "Area personale" : containers.find((x) => x.id === looseTarget)?.meta.name}».</p>}
+            {c.duplicates > 0 && <p class="muted">{c.duplicates} elementi già presenti non sono stati duplicati.</p>}
+            {c.skipped.length > 0 && <div class="notice warn">{c.skipped.map((x) => `${x.name}: ${x.reason}`).join(". ")}.</div>}
+          </>
+        ) : <p>{done.single} elementi cifrati e caricati.</p>}
+        <div class="notice warn">Elimina il file di export dal computer: contiene le password in chiaro.</div>
         <div class="row">
-          <button class="btn primary" onClick={() => go(`/c/${target}`)}>Apri il cliente</button>
+          {c ? <button class="btn primary" onClick={() => go("/clienti")}>Vai ai clienti</button>
+             : <button class="btn primary" onClick={() => go(`/c/${target}`)}>Apri il cliente</button>}
           <button class="btn" onClick={() => { setDone(null); setPreview(null); setFile(null); }}>Importa altro</button>
         </div>
       </div>
@@ -432,7 +451,7 @@ export function Import({ vault, containers, onChanged }: { vault: Vault; contain
         <h1>Importa</h1>
         <p class="muted">Il file viene letto e cifrato solo su questo computer: il server non lo riceve mai.</p>
       </div>
-      <div class="card pad stack" style="max-width:640px">
+      <div class="card pad stack" style="max-width:680px">
         <label class="field">Provenienza
           <select class="input" value={source} onChange={(e) => { setSource(e.currentTarget.value as typeof source); setPreview(null); }}>
             {SOURCES.map((s) => <option value={s.id}>{s.label}</option>)}
@@ -451,11 +470,31 @@ export function Import({ vault, containers, onChanged }: { vault: Vault; contain
             <input class="input" type="file" onChange={(e) => { setKeyFile(e.currentTarget.files?.[0] ?? null); setPreview(null); }} />
           </label>
         )}
-        <label class="field">Importa nel cliente
-          <select class="input" value={target} onChange={(e) => setTarget(e.currentTarget.value)}>
-            {writable.map((c) => <option value={c.id}>{c.kind === "personal" ? "Area personale" : c.meta.name}</option>)}
-          </select>
-        </label>
+
+        <fieldset class="stack" style="border:0;padding:0;margin:0;gap:8px">
+          <legend class="small muted" style="margin-bottom:6px">Dove importare</legend>
+          <label class="check"><input type="radio" name="mode" checked={mode === "clients"} onChange={() => setMode("clients")} />
+            Un cliente per ogni cartella principale (le sottocartelle restano cartelle del cliente)</label>
+          <label class="check"><input type="radio" name="mode" checked={mode === "single"} onChange={() => setMode("single")} />
+            Tutto in un solo cliente</label>
+        </fieldset>
+
+        {mode === "single" && (
+          <label class="field">Importa nel cliente
+            <select class="input" value={target} onChange={(e) => setTarget(e.currentTarget.value)}>
+              {writable.map((c) => <option value={c.id}>{c.kind === "personal" ? "Area personale" : c.meta.name}</option>)}
+            </select>
+          </label>
+        )}
+        {mode === "clients" && (
+          <label class="field">Credenziali fuori da ogni cartella
+            <select class="input" value={looseTarget} onChange={(e) => setLooseTarget(e.currentTarget.value)}>
+              <option value="">Non importarle</option>
+              {writable.map((c) => <option value={c.id}>{c.kind === "personal" ? "Area personale" : c.meta.name}</option>)}
+            </select>
+          </label>
+        )}
+
         {preview && (
           <div class="notice info">
             Trovati {preview.items.length} elementi e {preview.folders.length} cartelle
@@ -463,16 +502,46 @@ export function Import({ vault, containers, onChanged }: { vault: Vault; contain
             {preview.skipped.length > 0 && ` ${preview.skipped.length} avvisi: ${preview.skipped.slice(0, 3).map((s) => `${s.name} (${s.reason})`).join("; ")}.`}
           </div>
         )}
+        {preview && mode === "clients" && plan && (
+          topFolders === 0 ? <div class="notice warn">Il file non contiene cartelle: usa «Tutto in un solo cliente».</div> : (
+            <div class="card table-wrap">
+              <table>
+                <thead><tr><th>Cliente</th><th>Elementi</th><th>Cartelle</th><th></th></tr></thead>
+                <tbody>
+                  {plan.clients.map((c) => (
+                    <tr>
+                      <td>{c.name}</td>
+                      <td class="mono">{c.items.length}</td>
+                      <td class="mono">{c.folders.length}</td>
+                      <td>{c.readOnly ? <span class="badge warn">Esiste, sola lettura: saltato</span> : c.existing ? <span class="badge">Esistente</span> : <span class="badge accent">Nuovo</span>}</td>
+                    </tr>
+                  ))}
+                  {plan.loose.length > 0 && (
+                    <tr><td class="muted">Senza cartella</td><td class="mono">{plan.loose.length}</td><td></td><td class="small muted">{looseTarget ? "Nella destinazione scelta" : "Non importati"}</td></tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
+          )
+        )}
         <ErrorNote error={error} />
         <div class="row">
           {!preview && <button class="btn primary" disabled={busy || !file} onClick={analyse}>{busy ? "Lettura…" : "Analizza il file"}</button>}
-          {preview && (
+          {preview && mode === "single" && (
             <button class="btn primary" disabled={busy || !target} onClick={() => run(async () => {
               const n = await importInto(vault, target, preview, (d, t) => setProgress(`${d} di ${t}`));
               setProgress(null);
               onChanged();
-              setDone(n);
+              setDone({ single: n });
             })}>{busy ? `Cifratura ${progress ?? ""}` : `Importa ${preview.items.length} elementi`}</button>
+          )}
+          {preview && mode === "clients" && topFolders > 0 && plan && (
+            <button class="btn primary" disabled={busy} onClick={() => run(async () => {
+              const r = await importAsClients(vault, preview, { looseContainerId: looseTarget || null, onProgress: setProgress });
+              setProgress(null);
+              onChanged();
+              setDone({ clients: r });
+            })}>{busy ? (progress ?? "Cifratura…") : `Importa in ${plan.clients.filter((c) => !c.readOnly).length} clienti`}</button>
           )}
         </div>
       </div>
