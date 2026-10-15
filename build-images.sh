@@ -40,7 +40,7 @@ images+=("${repobase}/${reponame}-app")
 # passaggi senza permesso di esecuzione (succede se il repository arriva da
 # uno zip estratto senza permessi Unix).
 find imageroot/actions -type f ! -name '*.json' -exec chmod 755 {} +
-chmod 755 imageroot/bin/* imageroot/events/*/*
+chmod 755 imageroot/bin/* imageroot/events/*/* imageroot/update-module.d/*
 
 # Add imageroot directory to the container image
 buildah add "${container}" imageroot /imageroot

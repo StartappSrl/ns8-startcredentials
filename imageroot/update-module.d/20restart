@@ -1,0 +1,13 @@
+#!/bin/bash
+
+#
+# Dopo update-module: ricarica le unità systemd aggiornate e riavvia il pod,
+# così app e database ripartono con le immagini nuove. Le migrazioni del
+# database vengono applicate dall'app all'avvio.
+#
+
+exec 1>&2
+set -e
+
+systemctl --user daemon-reload
+systemctl --user try-restart startcredentials.service
