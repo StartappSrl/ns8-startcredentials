@@ -603,6 +603,23 @@ export class Vault {
   }
 
   async deleteItem(itemId: string): Promise<void> { await this.api.del(`/items/${itemId}`); }
+
+  /** Sposta nel cestino più elementi dello stesso contenitore. Restituisce quanti sono stati spostati. */
+  async deleteItems(containerId: string, itemIds: string[]): Promise<number> {
+    let changed = 0;
+    for (let i = 0; i < itemIds.length; i += 1000) {
+      changed += (await this.api.post<{ changed: number }>(`/containers/${containerId}/items/bulk`, { action: "delete", ids: itemIds.slice(i, i + 1000) })).changed;
+    }
+    return changed;
+  }
+
+  async restoreItems(containerId: string, itemIds: string[]): Promise<number> {
+    let changed = 0;
+    for (let i = 0; i < itemIds.length; i += 1000) {
+      changed += (await this.api.post<{ changed: number }>(`/containers/${containerId}/items/bulk`, { action: "restore", ids: itemIds.slice(i, i + 1000) })).changed;
+    }
+    return changed;
+  }
   async restoreItem(itemId: string): Promise<void> { await this.api.post(`/items/${itemId}/restore`); }
 
   async itemVersions(item: Item): Promise<{ revision: number; createdAt: string; by: string; data: ItemData }[]> {

@@ -185,3 +185,7 @@ td { padding: 10px 14px; border-bottom: 1px solid var(--line); vertical-align: m
 .chevron { transition: transform .15s ease; flex-shrink: 0; color: var(--muted); }
 .chevron.open { transform: rotate(90deg); }
 @media (prefers-reduced-motion: reduce) { .chevron { transition: none; } }
+
+/* selezione multipla */
+.bulk-bar { position: sticky; top: 0; z-index: 2; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; padding: 10px 14px; background: var(--accent-soft); border-bottom: 1px solid var(--accent-line); }
+.row-check { width: 17px; height: 17px; accent-color: var(--accent); flex-shrink: 0; margin: 0; cursor: pointer; }

@@ -328,7 +328,20 @@ try {
   await waitText("elementi in");
   type("Cerca in tutti i clienti", "microsoft");
   await waitText("Microsoft 365 – amministratore");
-  step("ricerca globale");
+  const hit = [...w.document.querySelectorAll("a.item-row")].find((a) => a.textContent.includes("Microsoft 365"));
+  assert.match(hit.getAttribute("href"), /^#\/c\/[0-9a-f-]{36}\/i\/[0-9a-f-]{36}$/);
+  // Comprime la cartella che contiene l'elemento: l'arrivo dalla ricerca deve riaprirla.
+  await nav(hit.getAttribute("href").split("/i/")[0]);
+  await waitFor(() => w.document.querySelector(".folder-toggle"), "cartelle del cliente");
+  await click("Comprimi tutto");
+  await waitFor(() => !w.document.querySelector("[data-item]"), "cartelle compresse");
+  await nav("#/cerca");
+  await waitFor(() => byLabel("Cerca in tutti i clienti")?.value === "microsoft", "ricerca conservata al ritorno");
+  await waitText("Microsoft 365 – amministratore");
+  await nav([...w.document.querySelectorAll("a.item-row")].find((a) => a.textContent.includes("Microsoft 365")).getAttribute("href"));
+  await waitFor(() => w.document.querySelector('.item-row.on[data-item]')?.textContent.includes("Microsoft 365"), "elemento selezionato nell'elenco");
+  await waitFor(() => w.document.querySelector(".detail h2")?.textContent === "Microsoft 365 – amministratore", "dettaglio dell'elemento");
+  step("ricerca globale: il risultato apre la password selezionata, cartelle riaperte");
 
   await nav("#/salute");
   await waitText("Password analizzate");
@@ -376,6 +389,33 @@ try {
   await click("Vai ai clienti");
   await waitText("Officine Ciampino");
   step("import con un cliente per ogni cartella principale");
+
+  // Selezione multipla nel cliente Studio Legale Moretti (Microsoft 365 nella sottocartella, NAS in "Server").
+  const morettiCard = await waitFor(() => [...w.document.querySelectorAll(".client")].find((x) => x.textContent.includes("Studio Legale Moretti")), "scheda del cliente");
+  morettiCard.dispatchEvent(new w.MouseEvent("click", { bubbles: true }));
+  await waitFor(() => w.document.querySelector(".folder-toggle"), "cartelle del cliente");
+  await click("Espandi tutto");
+  await waitFor(() => w.document.querySelectorAll("[data-item]").length >= 2, "elementi del cliente");
+  const before = w.document.querySelectorAll("[data-item]").length;
+  await click("Seleziona");
+  await waitFor(() => w.document.querySelector(".bulk-bar"), "barra di selezione");
+  w.document.querySelector('[aria-label="Seleziona tutta la cartella Server"]').dispatchEvent(new w.MouseEvent("click", { bubbles: true }));
+  w.document.querySelector('[aria-label="Seleziona Microsoft 365 – amministratore"]').dispatchEvent(new w.MouseEvent("click", { bubbles: true }));
+  await waitFor(() => w.document.querySelector(".bulk-bar b")?.textContent === "2", "2 elementi selezionati");
+  await click("Sposta nel cestino");
+  await waitText("Spostare 2 elementi nel cestino?");
+  [...w.document.querySelectorAll(".dialog button")].find((b) => b.textContent === "Sposta nel cestino").dispatchEvent(new w.MouseEvent("click", { bubbles: true }));
+  await waitFor(() => w.document.querySelectorAll("[data-item]").length === before - 2, "elementi spostati nel cestino");
+  assert.ok(!w.document.querySelector(".bulk-bar"), "la selezione si chiude dopo l'azione");
+  [...w.document.querySelectorAll('[role="tab"]')].find((t) => t.textContent === "Cestino").dispatchEvent(new w.MouseEvent("click", { bubbles: true }));
+  await waitFor(() => w.document.querySelectorAll("[data-item]").length === 2, "due elementi nel cestino");
+  await click("Seleziona");
+  await click("Seleziona tutti (2)");
+  await click("Ripristina");
+  await waitFor(() => w.document.querySelectorAll("[data-item]").length === 0, "cestino vuoto");
+  [...w.document.querySelectorAll('[role="tab"]')].find((t) => t.textContent === "Tutto").dispatchEvent(new w.MouseEvent("click", { bubbles: true }));
+  await waitFor(() => w.document.querySelectorAll("[data-item]").length === before, "elementi ripristinati");
+  step("selezione multipla: cartella intera e singola password nel cestino, poi ripristino");
 
   await nav("#/admin/audit");
   await waitText("Registro attività");

@@ -111,10 +111,11 @@ function Main({ vault }: { vault: Vault }) {
   }, [containers.data]);
 
   let page;
-  const m = route.match(/^\/c\/([0-9a-f-]{36})$/);
+  // /c/<cliente> oppure /c/<cliente>/i/<elemento> per aprire direttamente un elemento.
+  const m = route.match(/^\/c\/([0-9a-f-]{36})(?:\/i\/([0-9a-f-]{36}))?$/);
   if (containers.error) page = <ErrorNote error={containers.error} />;
   else if (!containers.data) page = <p class="muted">Decifratura dei clienti…</p>;
-  else if (m) page = <ContainerView vault={vault} id={m[1]!} onChanged={containers.reload} />;
+  else if (m) page = <ContainerView vault={vault} id={m[1]!} focusItem={m[2]} onChanged={containers.reload} />;
   else if (route === "/personale") page = personal ? <ContainerView vault={vault} id={personal.id} onChanged={containers.reload} /> : <p class="muted">Preparazione…</p>;
   else if (route === "/condivisi") page = <Clients vault={vault} containers={list} reload={containers.reload} shared />;
   else if (route === "/generatore") page = <Generator />;

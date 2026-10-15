@@ -101,9 +101,9 @@ Serve Node.js 22 e un PostgreSQL di test (`TEST_DATABASE_URL`, predefinito `post
 npm ci
 npm test -w packages/crypto          # 14 test del core crittografico
 npm run build -w packages/client
-npm test -w app                      # 16 scenari end-to-end su server e database reali
+npm test -w app                      # 17 scenari end-to-end su server e database reali
 npm run build -w extension           # produce extension/startcredentials-extension.zip
-npm run test:ui -w extension         # 25 passaggi dell'interfaccia (jsdom + server reale)
+npm run test:ui -w extension         # 26 passaggi dell'interfaccia (jsdom + server reale)
 npm run test:import -w extension     # import con il pacchetto per browser (KeePass reale, CSV, 1Password)
 npm run test:inline -w extension     # icona nei campi di accesso
 ./build-images.sh                    # immagini del modulo e dell'applicazione (buildah)

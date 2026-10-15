@@ -136,6 +136,27 @@ export async function itemRoutes(app: FastifyInstance, ctx: Ctx) {
     });
   });
 
+  /** Spostamento nel cestino o ripristino di più elementi dello stesso contenitore, in una transazione. */
+  app.post("/api/v1/containers/:id/items/bulk", async (req) => {
+    const a = requireAuth(req);
+    const { id } = z.object({ id: uuid }).parse(req.params);
+    const body = z.object({ action: z.enum(["delete", "restore"]), ids: z.array(uuid).min(1).max(5000) }).parse(req.body);
+    const ids = [...new Set(body.ids)];
+    return tx(db, async (c) => {
+      await requirePermission(c, id, a.id, "write");
+      const found = await c.query("SELECT id FROM items WHERE container_id = $1 AND id = ANY($2::uuid[])", [id, ids]);
+      if (found.rowCount !== ids.length) throw badRequest("items_not_in_container");
+      const r = body.action === "delete"
+        ? await c.query("UPDATE items SET deleted_at = now(), updated_by = $3 WHERE container_id = $1 AND id = ANY($2::uuid[]) AND deleted_at IS NULL RETURNING id", [id, ids, a.id])
+        : await c.query("UPDATE items SET deleted_at = NULL, updated_by = $3, updated_at = now() WHERE container_id = $1 AND id = ANY($2::uuid[]) AND deleted_at IS NOT NULL RETURNING id", [id, ids, a.id]);
+      for (const row of r.rows) {
+        await audit(c, { actorId: a.id, action: body.action === "delete" ? "item.deleted" : "item.restored", targetType: "item", targetId: row.id, containerId: id, ip: req.ip, details: { bulk: true } });
+      }
+      await c.query("UPDATE containers SET updated_at = now() WHERE id = $1", [id]);
+      return { changed: r.rowCount };
+    });
+  });
+
   app.get("/api/v1/items/:id/versions", async (req) => {
     const a = requireAuth(req);
     const { id } = z.object({ id: uuid }).parse(req.params);

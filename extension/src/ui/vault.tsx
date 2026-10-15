@@ -1,5 +1,5 @@
 import { ComponentChildren } from "preact";
-import { useEffect, useMemo, useState } from "preact/hooks";
+import { useEffect, useMemo, useRef, useState } from "preact/hooks";
 import { Container, DirectoryUser, effectiveTotpUri, Folder, generatePassword, Item, ItemData, KEEPASS_TOTP_FIELDS, Permission, Vault } from "@startcredentials/client";
 import { download, initials, loadCollapsed, lock, relTime, saveCollapsed, signOut, tint } from "../shared";
 import { Brand, CopyButton, Dialog, ErrorNote, Meter, OtpCode, Secret, useAction, useLoad, useToast } from "./kit";
@@ -168,7 +168,7 @@ function ContainerDialog({ vault, container, onClose, onSaved }: { vault: Vault;
 
 type Tab = "all" | "login" | "totp" | "note" | "files" | "trash";
 
-export function ContainerView({ vault, id, onChanged }: { vault: Vault; id: string; onChanged: () => void }) {
+export function ContainerView({ vault, id, focusItem, onChanged }: { vault: Vault; id: string; focusItem?: string; onChanged: () => void }) {
   const [tab, setTab] = useState<Tab>("all");
   const [q, setQ] = useState("");
   const [selected, setSelected] = useState<string | null>(null);
@@ -177,10 +177,34 @@ export function ContainerView({ vault, id, onChanged }: { vault: Vault; id: stri
   const [editMeta, setEditMeta] = useState(false);
   const [newFolder, setNewFolder] = useState(false);
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
+  const [selecting, setSelecting] = useState(false);
+  const [checked, setChecked] = useState<Set<string>>(new Set());
+  const [confirmBulk, setConfirmBulk] = useState(false);
+  const bulk = useAction();
+  useEffect(() => { setChecked(new Set()); }, [tab, id]);
   useEffect(() => { void loadCollapsed(id).then((ids) => setCollapsed(new Set(ids))); }, [id]);
   const info = useLoad(() => vault.container(id), [id]);
   const items = useLoad(() => vault.items(id, { trash: tab === "trash" }), [id, tab === "trash"]);
   const toast = useToast();
+  // Arrivo da ricerca o rapporto: seleziona l'elemento, apre le sue cartelle e lo porta in vista.
+  const focused = useRef<string | null>(null);
+  useEffect(() => {
+    if (!focusItem || focused.current === focusItem || !items.data || !info.data) return;
+    const it = items.data.find((i) => i.id === focusItem);
+    if (!it) return;
+    focused.current = focusItem;
+    setTab("all");
+    setQ("");
+    setSelected(it.id);
+    const ancestors = new Set<string>();
+    let f = info.data.folders.find((x) => x.id === it.folderId);
+    for (let guard = 0; f && guard < 50; guard++) {
+      ancestors.add(f.id);
+      f = info.data.folders.find((x) => x.id === f!.parentId);
+    }
+    setCollapsed((prev) => new Set([...prev].filter((x) => !ancestors.has(x))));
+    setTimeout(() => document.querySelector(`[data-item="${it.id}"]`)?.scrollIntoView?.({ block: "center" }), 50);
+  }, [focusItem, items.data, info.data]);
   const c = info.data;
 
   const visible = useMemo(() => {
@@ -213,29 +237,70 @@ export function ContainerView({ vault, id, onChanged }: { vault: Vault; id: stri
   }
   const itemsIn = (fid: string | null) => visible.filter((i) => (i.folderId ?? null) === fid);
   const countDeep = (fid: string): number => itemsIn(fid).length + (children.get(fid) ?? []).reduce((n, ch) => n + countDeep(ch.id), 0);
+  const deepItems = (fid: string): Item[] => [...itemsIn(fid), ...(children.get(fid) ?? []).flatMap((ch) => deepItems(ch.id))];
+  // Aggiornamenti calcolati sullo stato più recente: clic rapidi non si sovrascrivono.
+  const toggleItem = (iid: string) => setChecked((prev) => {
+    const next = new Set(prev);
+    if (next.has(iid)) next.delete(iid);
+    else next.add(iid);
+    return next;
+  });
+  const toggleFolder = (fid: string) => {
+    const ids = deepItems(fid).map((i) => i.id);
+    setChecked((prev) => {
+      const all = ids.length > 0 && ids.every((x) => prev.has(x));
+      const next = new Set(prev);
+      for (const x of ids) {
+        if (all) next.delete(x);
+        else next.add(x);
+      }
+      return next;
+    });
+  };
+  const endSelection = () => { setSelecting(false); setChecked(new Set()); };
+  const runBulk = (action: "delete" | "restore") => bulk.run(async () => {
+    const ids = [...checked];
+    const n = action === "delete" ? await vault.deleteItems(id, ids) : await vault.restoreItems(id, ids);
+    if (selected && checked.has(selected)) setSelected(null);
+    setConfirmBulk(false);
+    endSelection();
+    reloadAll();
+    toast(action === "delete" ? `${n} ${n === 1 ? "elemento spostato" : "elementi spostati"} nel cestino` : `${n} ${n === 1 ? "elemento ripristinato" : "elementi ripristinati"}`);
+  });
+
   // Con ricerca o filtri attivi si aprono solo le cartelle che contengono risultati.
   const filtering = !!q || tab !== "all";
-  const toggle = (fid: string) => {
-    const next = new Set(collapsed);
+  const toggle = (fid: string) => setCollapsed((prev) => {
+    const next = new Set(prev);
     if (next.has(fid)) next.delete(fid);
     else next.add(fid);
-    setCollapsed(next);
     void saveCollapsed(id, [...next]);
-  };
+    return next;
+  });
   const setAll = (close: boolean) => {
     const next = new Set(close ? c.folders.map((f) => f.id) : []);
     setCollapsed(next);
     void saveCollapsed(id, [...next]);
   };
 
-  const renderItem = (i: Item, depth: number) => (
-    <button class={`item-row${i.id === selected ? " on" : ""}`} style={`padding-left:${18 + depth * 20}px`} onClick={() => setSelected(i.id)}>
+  const itemContent = (i: Item) => (
+    <>
       <span class="kind">{TYPE_TAG[i.type]}</span>
       <span class="grow">
         <span class="ellipsis" style="display:block;font-weight:500">{i.data.name}</span>
         <span class="ellipsis small muted" style="display:block">{i.data.username || (i.data.urls?.[0] ?? TYPE_LABEL[i.type])}</span>
       </span>
       <span class="small muted">{[effectiveTotpUri(i.data) && "OTP", i.attachments.length && `${i.attachments.length} file`].filter(Boolean).join(" · ")}</span>
+    </>
+  );
+  const renderItem = (i: Item, depth: number) => selecting ? (
+    <label class={`item-row${checked.has(i.id) ? " on" : ""}`} data-item={i.id} style={`padding-left:${18 + depth * 20}px;cursor:pointer`}>
+      <input type="checkbox" class="row-check" checked={checked.has(i.id)} onChange={() => toggleItem(i.id)} aria-label={`Seleziona ${i.data.name}`} />
+      {itemContent(i)}
+    </label>
+  ) : (
+    <button class={`item-row${i.id === selected ? " on" : ""}`} data-item={i.id} aria-current={i.id === selected ? "true" : undefined} style={`padding-left:${18 + depth * 20}px`} onClick={() => setSelected(i.id)}>
+      {itemContent(i)}
     </button>
   );
 
@@ -247,6 +312,10 @@ export function ContainerView({ vault, id, onChanged }: { vault: Vault; id: stri
     return (
       <>
         <div class="group-h" style={`padding-left:${10 + depth * 20}px`}>
+          {selecting && n > 0 && (
+            <input type="checkbox" class="row-check" aria-label={`Seleziona tutta la cartella ${f.name}`}
+              checked={deepItems(f.id).every((x) => checked.has(x.id))} onChange={() => toggleFolder(f.id)} />
+          )}
           <button class="folder-toggle" aria-expanded={open} disabled={filtering} onClick={() => toggle(f.id)}>
             <svg class={`chevron${open ? " open" : ""}`} aria-hidden="true" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M9 6l6 6-6 6" /></svg>
             <span>{f.name}</span>
@@ -294,6 +363,7 @@ export function ContainerView({ vault, id, onChanged }: { vault: Vault; id: stri
           ))}
         </div>
         <div class="row" style="gap:6px">
+          {canWrite && !selecting && visible.length > 0 && <button class="btn sm" onClick={() => setSelecting(true)}>Seleziona</button>}
           {c.folders.length > 0 && !filtering && (
             <>
               <button class="btn sm ghost" onClick={() => setAll(false)}>Espandi tutto</button>
@@ -306,6 +376,18 @@ export function ContainerView({ vault, id, onChanged }: { vault: Vault; id: stri
 
       <div class="split">
         <section class="card list" aria-label="Elementi">
+          {selecting && (
+            <div class="bulk-bar" role="toolbar" aria-label="Azioni sugli elementi selezionati">
+              <span class="grow" aria-live="polite"><b>{checked.size}</b> {checked.size === 1 ? "selezionato" : "selezionati"}</span>
+              <button class="btn sm ghost" onClick={() => setChecked(new Set(visible.map((i) => i.id)))}>Seleziona tutti ({visible.length})</button>
+              <button class="btn sm ghost" disabled={!checked.size} onClick={() => setChecked(new Set())}>Deseleziona</button>
+              {tab === "trash"
+                ? <button class="btn sm primary" disabled={!checked.size || bulk.busy} onClick={() => runBulk("restore")}>Ripristina</button>
+                : <button class="btn sm danger" disabled={!checked.size || bulk.busy} onClick={() => setConfirmBulk(true)}>Sposta nel cestino</button>}
+              <button class="btn sm" onClick={endSelection}>Fine</button>
+            </div>
+          )}
+          {selecting && <ErrorNote error={bulk.error} />}
           {items.loading && !items.data && <div class="empty">Decifratura…</div>}
           {items.data && visible.length === 0 && (
             <div class="empty">
@@ -331,6 +413,18 @@ export function ContainerView({ vault, id, onChanged }: { vault: Vault; id: stri
 
       {editing && <ItemEditor vault={vault} containerId={id} folders={c.folders} item={editing === "new" ? undefined : editing}
         onClose={() => setEditing(null)} onSaved={(iid) => { setEditing(null); setSelected(iid); reloadAll(); toast("Salvato"); }} />}
+      {confirmBulk && (
+        <Dialog title={`Spostare ${checked.size} ${checked.size === 1 ? "elemento" : "elementi"} nel cestino?`} onClose={() => setConfirmBulk(false)}>
+          <p>Restano recuperabili dal Cestino per 30 giorni, poi vengono eliminati definitivamente. Gli altri membri del cliente non li vedranno più.</p>
+          <ErrorNote error={bulk.error} />
+          <div class="row" style="justify-content:flex-end">
+            <button class="btn" onClick={() => setConfirmBulk(false)}>Annulla</button>
+            <button class="btn primary" style="background:var(--danger);border-color:var(--danger)" disabled={bulk.busy} onClick={() => runBulk("delete")}>
+              {bulk.busy ? "Spostamento…" : "Sposta nel cestino"}
+            </button>
+          </div>
+        </Dialog>
+      )}
       {sharing && <ShareDialog vault={vault} container={c} onClose={() => { setSharing(false); reloadAll(); }} />}
       {editMeta && <ContainerDialog vault={vault} container={c} onClose={() => setEditMeta(false)} onSaved={() => { setEditMeta(false); reloadAll(); }} />}
       {newFolder && <FolderDialog vault={vault} containerId={id} folders={c.folders} onClose={() => setNewFolder(false)} onSaved={() => { setNewFolder(false); info.reload(); }} />}

@@ -463,12 +463,36 @@ describe("StartCredentials end-to-end", () => {
     assert.equal((await marco.items(rossi)).length, 2);
   });
 
+  test("selezione multipla: cestino e ripristino di più elementi, controlli di permesso", async () => {
+    const marco: Vault = state.marco;
+    const sara: Vault = state.sara;
+    const cid = await marco.createContainer({ name: "Pulizia in blocco" });
+    const ids = [];
+    for (const n of ["A", "B", "C", "D"]) ids.push(await marco.createItem(cid, { type: "login", name: n, password: n }));
+    assert.equal(await marco.deleteItems(cid, ids.slice(0, 3)), 3);
+    assert.deepEqual((await marco.items(cid)).map((i) => i.data.name), ["D"]);
+    assert.equal((await marco.items(cid, { trash: true })).length, 3);
+    assert.equal(await marco.restoreItems(cid, ids.slice(0, 2)), 2);
+    assert.equal((await marco.items(cid)).length, 3);
+    // Un elemento di un altro contenitore nella stessa richiesta: rifiutata per intero.
+    const other = await marco.createContainer({ name: "Altro" });
+    const foreign = await marco.createItem(other, { type: "note", name: "estraneo" });
+    await rejects(marco.deleteItems(cid, [ids[3]!, foreign]), "items_not_in_container");
+    assert.equal((await marco.items(cid)).length, 3, "nessuna modifica parziale");
+    // Sola lettura: niente cancellazioni.
+    await marco.share(cid, state.saraId, "read");
+    await rejects(sara.deleteItems(cid, [ids[3]!]), "write_required");
+    const log = await marco.auditLog({ containerId: cid });
+    assert.equal(log.filter((l) => l.action === "item.deleted").length, 3);
+    assert.equal(log.filter((l) => l.action === "item.restored").length, 2);
+  });
+
   test("sospensione e registro di audit a prova di manomissione", async () => {
     const marco: Vault = state.marco;
     await marco.setUser(state.lauraId, { status: "suspended" });
     await rejects(state.laura.api.get("/containers"), "unauthorized");
     await marco.setUser(state.lauraId, { status: "active" });
-    const log = await marco.auditLog();
+    const log = await marco.auditLog({ limit: 500 });
     for (const action of ["org.initialized", "user.key_certified", "container.key_rotated", "container.imported", "user.recovery_completed", "auth.login_failed",
                           "auth.mfa_backup_used", "user.mfa_reset", "user.password_changed", "user.offboarded", "container.export",
                           "group.created", "group.member_set", "group.member_removed", "group.key_rotated", "container.group_set"]) {

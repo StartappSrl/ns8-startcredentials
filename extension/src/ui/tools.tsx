@@ -17,7 +17,7 @@ const where = (c: Container) => (c.kind === "personal" ? "Area personale" : c.me
 
 function Row({ container, item, note }: { container: Container; item: Item; note?: string }) {
   return (
-    <a class="item-row" href={`#/c/${container.id}`} style="text-decoration:none;color:inherit">
+    <a class="item-row" href={`#/c/${container.id}/i/${item.id}`} style="text-decoration:none;color:inherit">
       <span class="grow">
         <span class="ellipsis" style="display:block;font-weight:500">{item.data.name}</span>
         <span class="ellipsis small muted" style="display:block">{where(container)}{item.data.username ? ` · ${item.data.username}` : ""}</span>
@@ -27,9 +27,13 @@ function Row({ container, item, note }: { container: Container; item: Item; note
   );
 }
 
+/** La ricerca resta quando si torna indietro dal dettaglio di un elemento. */
+let lastQuery = "";
+
 export function Search({ vault }: { vault: Vault }) {
   const all = useLoad(() => loadAll(vault), []);
-  const [q, setQ] = useState("");
+  const [q, setQState] = useState(lastQuery);
+  const setQ = (v: string) => { lastQuery = v; setQState(v); };
   const results = useMemo(() => {
     const s = q.trim().toLowerCase();
     if (!s || !all.data) return [];
