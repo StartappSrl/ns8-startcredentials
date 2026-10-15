@@ -177,3 +177,11 @@ td { padding: 10px 14px; border-bottom: 1px solid var(--line); vertical-align: m
 .pop-item { border: 1px solid var(--line); border-radius: 12px; padding: 12px; display: flex; flex-direction: column; gap: 10px; }
 .pop-item.match { border-color: var(--accent-line); background: var(--accent-soft); }
 .pop-otp { display: flex; align-items: center; gap: 10px; padding: 7px 10px; border-radius: 8px; background: var(--surface); }
+
+/* albero delle cartelle */
+.folder-toggle { all: unset; display: inline-flex; align-items: center; gap: 6px; cursor: pointer; color: var(--ink-2); font-weight: 600; font-size: 13px; min-height: 24px; }
+.folder-toggle:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 4px; }
+.folder-toggle:disabled { cursor: default; }
+.chevron { transition: transform .15s ease; flex-shrink: 0; color: var(--muted); }
+.chevron.open { transform: rotate(90deg); }
+@media (prefers-reduced-motion: reduce) { .chevron { transition: none; } }

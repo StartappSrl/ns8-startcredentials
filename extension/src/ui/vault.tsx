@@ -1,7 +1,7 @@
 import { ComponentChildren } from "preact";
 import { useEffect, useMemo, useState } from "preact/hooks";
 import { Container, DirectoryUser, effectiveTotpUri, Folder, generatePassword, Item, ItemData, KEEPASS_TOTP_FIELDS, Permission, Vault } from "@startcredentials/client";
-import { download, initials, lock, relTime, signOut, tint } from "../shared";
+import { download, initials, loadCollapsed, lock, relTime, saveCollapsed, signOut, tint } from "../shared";
 import { Brand, CopyButton, Dialog, ErrorNote, Meter, OtpCode, Secret, useAction, useLoad, useToast } from "./kit";
 
 export const PERM_LABEL: Record<Permission, string> = { read: "Sola lettura", write: "Può modificare", manage: "Può gestire" };
@@ -176,6 +176,8 @@ export function ContainerView({ vault, id, onChanged }: { vault: Vault; id: stri
   const [sharing, setSharing] = useState(false);
   const [editMeta, setEditMeta] = useState(false);
   const [newFolder, setNewFolder] = useState(false);
+  const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
+  useEffect(() => { void loadCollapsed(id).then((ids) => setCollapsed(new Set(ids))); }, [id]);
   const info = useLoad(() => vault.container(id), [id]);
   const items = useLoad(() => vault.items(id, { trash: tab === "trash" }), [id, tab === "trash"]);
   const toast = useToast();
@@ -203,11 +205,65 @@ export function ContainerView({ vault, id, onChanged }: { vault: Vault; id: stri
   const t = tint(c.id);
   const reloadAll = () => { items.reload(); info.reload(); onChanged(); };
 
-  const groups: { folder: Folder | null; items: Item[] }[] = [];
-  for (const f of [null, ...c.folders]) {
-    const g = visible.filter((i) => (i.folderId ?? null) === (f?.id ?? null));
-    if (g.length || (f && !q && tab === "all")) groups.push({ folder: f, items: g });
+  // Albero delle cartelle: figli ordinati per nome, conteggi comprensivi delle sottocartelle.
+  const children = new Map<string | null, Folder[]>();
+  for (const f of c.folders) {
+    const k = f.parentId ?? null;
+    children.set(k, [...(children.get(k) ?? []), f].sort((a, b) => a.name.localeCompare(b.name, "it")));
   }
+  const itemsIn = (fid: string | null) => visible.filter((i) => (i.folderId ?? null) === fid);
+  const countDeep = (fid: string): number => itemsIn(fid).length + (children.get(fid) ?? []).reduce((n, ch) => n + countDeep(ch.id), 0);
+  // Con ricerca o filtri attivi si aprono solo le cartelle che contengono risultati.
+  const filtering = !!q || tab !== "all";
+  const toggle = (fid: string) => {
+    const next = new Set(collapsed);
+    if (next.has(fid)) next.delete(fid);
+    else next.add(fid);
+    setCollapsed(next);
+    void saveCollapsed(id, [...next]);
+  };
+  const setAll = (close: boolean) => {
+    const next = new Set(close ? c.folders.map((f) => f.id) : []);
+    setCollapsed(next);
+    void saveCollapsed(id, [...next]);
+  };
+
+  const renderItem = (i: Item, depth: number) => (
+    <button class={`item-row${i.id === selected ? " on" : ""}`} style={`padding-left:${18 + depth * 20}px`} onClick={() => setSelected(i.id)}>
+      <span class="kind">{TYPE_TAG[i.type]}</span>
+      <span class="grow">
+        <span class="ellipsis" style="display:block;font-weight:500">{i.data.name}</span>
+        <span class="ellipsis small muted" style="display:block">{i.data.username || (i.data.urls?.[0] ?? TYPE_LABEL[i.type])}</span>
+      </span>
+      <span class="small muted">{[effectiveTotpUri(i.data) && "OTP", i.attachments.length && `${i.attachments.length} file`].filter(Boolean).join(" · ")}</span>
+    </button>
+  );
+
+  const renderFolder = (f: Folder, depth: number): ComponentChildren => {
+    const n = countDeep(f.id);
+    if (filtering && n === 0) return null;
+    const open = filtering || !collapsed.has(f.id);
+    const kids = children.get(f.id) ?? [];
+    return (
+      <>
+        <div class="group-h" style={`padding-left:${10 + depth * 20}px`}>
+          <button class="folder-toggle" aria-expanded={open} disabled={filtering} onClick={() => toggle(f.id)}>
+            <svg class={`chevron${open ? " open" : ""}`} aria-hidden="true" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M9 6l6 6-6 6" /></svg>
+            <span>{f.name}</span>
+          </button>
+          <span class="row" style="gap:6px">
+            {n}
+            {canWrite && !filtering && n === 0 && kids.length === 0 && (
+              <button class="btn ghost sm" style="min-height:24px;padding:0 6px" onClick={async () => { await vault.deleteFolder(f.id); info.reload(); }}>Elimina</button>
+            )}
+          </span>
+        </div>
+        {open && itemsIn(f.id).map((i) => renderItem(i, depth + 1))}
+        {open && kids.map((k) => renderFolder(k, depth + 1))}
+      </>
+    );
+  };
+  const rootItems = itemsIn(null);
 
   return (
     <>
@@ -237,7 +293,15 @@ export function ContainerView({ vault, id, onChanged }: { vault: Vault; id: stri
             <button role="tab" aria-selected={tab === k} class={`tab${tab === k ? " on" : ""}`} onClick={() => { setTab(k); setSelected(null); }}>{l}</button>
           ))}
         </div>
+        <div class="row" style="gap:6px">
+          {c.folders.length > 0 && !filtering && (
+            <>
+              <button class="btn sm ghost" onClick={() => setAll(false)}>Espandi tutto</button>
+              <button class="btn sm ghost" onClick={() => setAll(true)}>Comprimi tutto</button>
+            </>
+          )}
         <input class="input" type="search" style="max-width:260px" aria-label="Cerca nel cliente" placeholder="Cerca nel cliente…" value={q} onInput={(e) => setQ(e.currentTarget.value)} />
+        </div>
       </div>
 
       <div class="split">
@@ -250,31 +314,9 @@ export function ContainerView({ vault, id, onChanged }: { vault: Vault; id: stri
               {tab === "trash" && <p class="small">Gli elementi eliminati restano qui 30 giorni.</p>}
             </div>
           )}
-          {groups.map((g) => (
-            <>
-              {(g.folder || c.folders.length > 0) && (
-                <div class="group-h">
-                  <span>{g.folder?.name ?? "Senza cartella"}</span>
-                  <span class="row" style="gap:6px">
-                    {g.items.length}
-                    {g.folder && canWrite && g.items.length === 0 && (
-                      <button class="btn ghost sm" style="min-height:24px;padding:0 6px" onClick={async () => { await vault.deleteFolder(g.folder!.id); info.reload(); }}>Elimina</button>
-                    )}
-                  </span>
-                </div>
-              )}
-              {g.items.map((i) => (
-                <button class={`item-row${i.id === selected ? " on" : ""}`} onClick={() => setSelected(i.id)}>
-                  <span class="kind">{TYPE_TAG[i.type]}</span>
-                  <span class="grow">
-                    <span class="ellipsis" style="display:block;font-weight:500">{i.data.name}</span>
-                    <span class="ellipsis small muted" style="display:block">{i.data.username || (i.data.urls?.[0] ?? TYPE_LABEL[i.type])}</span>
-                  </span>
-                  <span class="small muted">{[effectiveTotpUri(i.data) && "OTP", i.attachments.length && `${i.attachments.length} file`].filter(Boolean).join(" · ")}</span>
-                </button>
-              ))}
-            </>
-          ))}
+          {c.folders.length > 0 && rootItems.length > 0 && <div class="group-h"><span style="padding-left:4px">Senza cartella</span><span>{rootItems.length}</span></div>}
+          {rootItems.map((i) => renderItem(i, 0))}
+          {(children.get(null) ?? []).map((f) => renderFolder(f, 0))}
         </section>
         <aside class="detail">
           {sel ? (
@@ -291,7 +333,7 @@ export function ContainerView({ vault, id, onChanged }: { vault: Vault; id: stri
         onClose={() => setEditing(null)} onSaved={(iid) => { setEditing(null); setSelected(iid); reloadAll(); toast("Salvato"); }} />}
       {sharing && <ShareDialog vault={vault} container={c} onClose={() => { setSharing(false); reloadAll(); }} />}
       {editMeta && <ContainerDialog vault={vault} container={c} onClose={() => setEditMeta(false)} onSaved={() => { setEditMeta(false); reloadAll(); }} />}
-      {newFolder && <FolderDialog vault={vault} containerId={id} onClose={() => setNewFolder(false)} onSaved={() => { setNewFolder(false); info.reload(); }} />}
+      {newFolder && <FolderDialog vault={vault} containerId={id} folders={c.folders} onClose={() => setNewFolder(false)} onSaved={() => { setNewFolder(false); info.reload(); }} />}
       {canManage && c.kind === "client" && (
         <div class="row" style="justify-content:flex-end">
           <DeleteContainer vault={vault} container={c} onDeleted={() => { onChanged(); go("/clienti"); }} />
@@ -324,13 +366,23 @@ function DeleteContainer({ vault, container, onDeleted }: { vault: Vault; contai
   );
 }
 
-function FolderDialog({ vault, containerId, onClose, onSaved }: { vault: Vault; containerId: string; onClose: () => void; onSaved: () => void }) {
+function FolderDialog({ vault, containerId, folders, onClose, onSaved }: { vault: Vault; containerId: string; folders: Folder[]; onClose: () => void; onSaved: () => void }) {
   const [name, setName] = useState("");
+  const [parent, setParent] = useState("");
   const { busy, error, run } = useAction();
+  const options = folders.map((f) => ({ id: f.id, path: folderPath(folders, f.id) })).sort((a, b) => a.path.localeCompare(b.path, "it"));
   return (
     <Dialog title="Nuova cartella" onClose={onClose}>
-      <form class="stack" onSubmit={(e) => { e.preventDefault(); run(async () => { await vault.createFolder(containerId, name.trim()); onSaved(); }); }}>
+      <form class="stack" onSubmit={(e) => { e.preventDefault(); run(async () => { await vault.createFolder(containerId, name.trim(), parent || null); onSaved(); }); }}>
         <label class="field">Nome<input class="input" required autoFocus value={name} onInput={(e) => setName(e.currentTarget.value)} placeholder="Rete e server" /></label>
+        {options.length > 0 && (
+          <label class="field">Dentro la cartella
+            <select class="input" value={parent} onChange={(e) => setParent(e.currentTarget.value)}>
+              <option value="">Nessuna (primo livello)</option>
+              {options.map((o) => <option value={o.id}>{o.path}</option>)}
+            </select>
+          </label>
+        )}
         <ErrorNote error={error} />
         <div class="row" style="justify-content:flex-end">
           <button type="button" class="btn" onClick={onClose}>Annulla</button>
@@ -339,6 +391,17 @@ function FolderDialog({ vault, containerId, onClose, onSaved }: { vault: Vault; 
       </form>
     </Dialog>
   );
+}
+
+/** Percorso completo di una cartella: "Rete / Server". */
+export function folderPath(folders: Folder[], id: string | null): string {
+  const parts: string[] = [];
+  let f = folders.find((x) => x.id === id);
+  for (let guard = 0; f && guard < 50; guard++) {
+    parts.unshift(f.name);
+    f = folders.find((x) => x.id === f!.parentId);
+  }
+  return parts.join(" / ");
 }
 
 // ------------------------------------------------------------------ dettaglio elemento
@@ -351,12 +414,12 @@ function ItemDetail({ vault, item, canWrite, folders, onEdit, onChanged, onDelet
   const [progress, setProgress] = useState<string | null>(null);
   const { error, run } = useAction();
   const report = (a: Parameters<Vault["report"]>[0]) => vault.report(a, item.containerId, item.id);
-  const folder = folders.find((f) => f.id === item.folderId);
+  const folder = item.folderId ? folderPath(folders, item.folderId) : "";
   return (
     <div class="card pad stack">
       <div>
         <h2 style="word-break:break-word">{d.name}</h2>
-        <div class="small muted">{TYPE_LABEL[d.type]}{folder ? ` · ${folder.name}` : ""}</div>
+        <div class="small muted">{TYPE_LABEL[d.type]}{folder ? ` · ${folder}` : ""}</div>
         {(d.urls ?? []).map((u) => <div class="small"><a href={/^https?:\/\//.test(u) ? u : `https://${u}`} target="_blank" rel="noopener noreferrer">{u}</a></div>)}
       </div>
       {item.deletedAt && <div class="notice warn">Nel cestino dal {new Date(item.deletedAt).toLocaleDateString("it-IT")}</div>}
@@ -508,7 +571,7 @@ function ItemEditor({ vault, containerId, folders, item, onClose, onSaved }: {
           {folders.length > 0 && (
             <label class="field" style="flex:1 1 160px">Cartella
               <select class="input" value={folderId} onChange={(e) => setFolderId(e.currentTarget.value)}>
-                <option value="">Nessuna</option>{folders.map((f) => <option value={f.id}>{f.name}</option>)}
+                <option value="">Nessuna</option>{[...folders].sort((a, b) => folderPath(folders, a.id).localeCompare(folderPath(folders, b.id), "it")).map((f) => <option value={f.id}>{folderPath(folders, f.id)}</option>)}
               </select>
             </label>
           )}

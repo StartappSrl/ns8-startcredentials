@@ -210,3 +210,14 @@ export function download(bytes: Uint8Array, name: string, mime: string): void {
   a.click();
   setTimeout(() => URL.revokeObjectURL(url), 10_000);
 }
+
+/** Cartelle chiuse per cliente (solo identificativi, nessun dato riservato). */
+export async function loadCollapsed(containerId: string): Promise<string[]> {
+  const r = await chrome.storage.local.get("collapsed");
+  return r.collapsed?.[containerId] ?? [];
+}
+
+export async function saveCollapsed(containerId: string, ids: string[]): Promise<void> {
+  const r = await chrome.storage.local.get("collapsed");
+  await chrome.storage.local.set({ collapsed: { ...(r.collapsed ?? {}), [containerId]: ids } });
+}
