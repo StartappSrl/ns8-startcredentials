@@ -2,10 +2,11 @@ import { FastifyInstance } from "fastify";
 import { mkdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { z } from "zod";
-import { audit, badRequest, conflict, Db, notFound, Tx, tx } from "../core.js";
+import { audit, badRequest, conflict, Db, forbidden, notFound, Tx, tx } from "../core.js";
+import { itemShareMessage, verify } from "@startcredentials/crypto";
 import { Ctx, requireAuth } from "../server.js";
 import { schemas } from "./auth.js";
-import { ACCESSIBLE_CONTAINERS, requirePermission } from "./containers.js";
+import { ACCESSIBLE_CONTAINERS, permissionOf, requirePermission } from "./containers.js";
 
 const { b64, envelope } = schemas;
 const uuid = z.string().uuid();
@@ -29,6 +30,13 @@ async function itemContainer(db: Db | Tx, itemId: string) {
   return r.rows[0].container_id as string;
 }
 
+async function sharedWith(db: Db | Tx, itemId: string, userId: string): Promise<boolean> {
+  const r = await db.query(
+    "SELECT 1 FROM item_shares sh JOIN items i ON i.id = sh.item_id AND sh.ik_version = i.ik_version AND i.deleted_at IS NULL WHERE sh.item_id = $1 AND sh.user_id = $2",
+    [itemId, userId]);
+  return !!r.rowCount;
+}
+
 async function checkFolder(c: Tx, folderId: string | null | undefined, containerId: string) {
   if (!folderId) return;
   const f = await c.query("SELECT 1 FROM folders WHERE id = $1 AND container_id = $2", [folderId, containerId]);
@@ -44,7 +52,8 @@ export async function itemRoutes(app: FastifyInstance, ctx: Ctx) {
     const { trash } = z.object({ trash: z.enum(["0", "1"]).default("0") }).parse(req.query);
     await requirePermission(db, id, a.id, "read");
     const items = await db.query(
-      `SELECT i.id, i.folder_id, i.type, i.ik_enc, i.ik_key_version, i.data_enc, i.revision, i.updated_at, i.deleted_at, u.display_name AS updated_by
+      `SELECT i.id, i.folder_id, i.type, i.ik_enc, i.ik_key_version, i.ik_version, i.data_enc, i.revision, i.updated_at, i.deleted_at, u.display_name AS updated_by,
+              (SELECT count(*)::int FROM item_shares sh WHERE sh.item_id = i.id) AS shares
          FROM items i JOIN users u ON u.id = i.updated_by
         WHERE i.container_id = $1 AND (i.deleted_at IS ${trash === "1" ? "NOT " : ""}NULL)
         ORDER BY i.updated_at DESC`, [id]);
@@ -59,7 +68,7 @@ export async function itemRoutes(app: FastifyInstance, ctx: Ctx) {
     return items.rows.map((r) => ({
       id: r.id, folderId: r.folder_id, type: r.type, ikEnc: r.ik_enc, ikKeyVersion: r.ik_key_version,
       dataEnc: r.data_enc, revision: r.revision, updatedAt: r.updated_at, updatedBy: r.updated_by,
-      deletedAt: r.deleted_at, attachments: byItem.get(r.id) ?? [],
+      deletedAt: r.deleted_at, attachments: byItem.get(r.id) ?? [], ikVersion: r.ik_version, shares: r.shares,
     }));
   });
 
@@ -140,17 +149,30 @@ export async function itemRoutes(app: FastifyInstance, ctx: Ctx) {
   app.post("/api/v1/containers/:id/items/bulk", async (req) => {
     const a = requireAuth(req);
     const { id } = z.object({ id: uuid }).parse(req.params);
-    const body = z.object({ action: z.enum(["delete", "restore"]), ids: z.array(uuid).min(1).max(5000) }).parse(req.body);
+    const body = z.object({
+      action: z.enum(["delete", "restore", "move"]),
+      ids: z.array(uuid).min(1).max(5000),
+      folderId: uuid.nullable().optional(),
+    }).parse(req.body);
     const ids = [...new Set(body.ids)];
     return tx(db, async (c) => {
       await requirePermission(c, id, a.id, "write");
       const found = await c.query("SELECT id FROM items WHERE container_id = $1 AND id = ANY($2::uuid[])", [id, ids]);
       if (found.rowCount !== ids.length) throw badRequest("items_not_in_container");
-      const r = body.action === "delete"
-        ? await c.query("UPDATE items SET deleted_at = now(), updated_by = $3 WHERE container_id = $1 AND id = ANY($2::uuid[]) AND deleted_at IS NULL RETURNING id", [id, ids, a.id])
-        : await c.query("UPDATE items SET deleted_at = NULL, updated_by = $3, updated_at = now() WHERE container_id = $1 AND id = ANY($2::uuid[]) AND deleted_at IS NOT NULL RETURNING id", [id, ids, a.id]);
+      let r;
+      if (body.action === "move") {
+        if (body.folderId === undefined) throw badRequest("folder_required");
+        await checkFolder(c, body.folderId, id);
+        // Solo la cartella cambia: i dati cifrati restano invariati.
+        r = await c.query("UPDATE items SET folder_id = $3, updated_by = $4, updated_at = now() WHERE container_id = $1 AND id = ANY($2::uuid[]) RETURNING id", [id, ids, body.folderId, a.id]);
+      } else if (body.action === "delete") {
+        r = await c.query("UPDATE items SET deleted_at = now(), updated_by = $3 WHERE container_id = $1 AND id = ANY($2::uuid[]) AND deleted_at IS NULL RETURNING id", [id, ids, a.id]);
+      } else {
+        r = await c.query("UPDATE items SET deleted_at = NULL, updated_by = $3, updated_at = now() WHERE container_id = $1 AND id = ANY($2::uuid[]) AND deleted_at IS NOT NULL RETURNING id", [id, ids, a.id]);
+      }
+      const auditAction = { delete: "item.deleted", restore: "item.restored", move: "item.moved" }[body.action];
       for (const row of r.rows) {
-        await audit(c, { actorId: a.id, action: body.action === "delete" ? "item.deleted" : "item.restored", targetType: "item", targetId: row.id, containerId: id, ip: req.ip, details: { bulk: true } });
+        await audit(c, { actorId: a.id, action: auditAction, targetType: "item", targetId: row.id, containerId: id, ip: req.ip, details: { bulk: true, ...(body.action === "move" ? { folderId: body.folderId } : {}) } });
       }
       await c.query("UPDATE containers SET updated_at = now() WHERE id = $1", [id]);
       return { changed: r.rowCount };
@@ -166,6 +188,155 @@ export async function itemRoutes(app: FastifyInstance, ctx: Ctx) {
       `SELECT v.revision, v.data_enc, v.created_at, u.display_name FROM item_versions v JOIN users u ON u.id = v.created_by
         WHERE v.item_id = $1 ORDER BY v.revision DESC`, [id]);
     return r.rows.map((v) => ({ revision: v.revision, dataEnc: v.data_enc, createdAt: v.created_at, by: v.display_name }));
+  });
+
+  // ------------------------------------------------------------ condivisione di singoli elementi
+
+  const shareSchema = z.object({
+    itemId: uuid, containerId: uuid, ikVersion: z.number().int().min(1), userId: uuid,
+    sealedKey: b64, grantedBy: uuid, signature: b64,
+  });
+
+  async function insertShare(c: Tx, sh: z.infer<typeof shareSchema>, actorId: string) {
+    if (sh.grantedBy !== actorId) throw badRequest("grant_not_signed_by_actor");
+    const keys = await c.query(
+      `SELECT u.id, u.status, k.sign_public, k.certification FROM users u
+         JOIN user_keys k ON k.user_id = u.id AND k.version = u.key_version WHERE u.id = ANY($1::uuid[])`, [[actorId, sh.userId]]);
+    const actor = keys.rows.find((r) => r.id === actorId);
+    const rec = keys.rows.find((r) => r.id === sh.userId);
+    const { signature, ...unsigned } = sh;
+    if (!actor || !verify(itemShareMessage(unsigned), signature, actor.sign_public)) throw badRequest("invalid_grant_signature");
+    if (!rec || rec.status !== "active") throw badRequest("recipient_not_active");
+    if (!rec.certification) throw badRequest("recipient_not_certified");
+    await c.query(
+      `INSERT INTO item_shares (item_id, user_id, ik_version, sealed_key, granted_by, signature) VALUES ($1,$2,$3,$4,$5,$6)
+       ON CONFLICT (item_id, user_id) DO UPDATE SET ik_version = EXCLUDED.ik_version, sealed_key = EXCLUDED.sealed_key,
+         granted_by = EXCLUDED.granted_by, signature = EXCLUDED.signature, created_at = now()`,
+      [sh.itemId, sh.userId, sh.ikVersion, sh.sealedKey, sh.grantedBy, sh.signature]);
+  }
+
+  /** Elemento condiviso (sola lettura) con un collega che magari non vede il cliente. */
+  app.post("/api/v1/items/:id/shares", async (req) => {
+    const a = requireAuth(req);
+    const { id } = z.object({ id: uuid }).parse(req.params);
+    const { share } = z.object({ share: shareSchema }).parse(req.body);
+    const r = await tx(db, async (c) => {
+      const it = (await c.query("SELECT container_id, ik_version, rekey_required FROM items WHERE id = $1 AND deleted_at IS NULL FOR UPDATE", [id])).rows[0];
+      if (!it) throw notFound("item_not_found");
+      const p = await requirePermission(c, it.container_id, a.id, "manage");
+      if (p.kind === "org") throw forbidden("org_items_not_shareable");
+      if (it.rekey_required) throw conflict("item_rekey_pending", "Prima va completata la ricifratura dell'elemento");
+      if (share.itemId !== id || share.containerId !== it.container_id || share.ikVersion !== it.ik_version) throw badRequest("stale_item_key");
+      if (share.userId === a.id) throw badRequest("cannot_share_with_self");
+      const existed = await c.query("SELECT 1 FROM item_shares WHERE item_id = $1 AND user_id = $2", [id, share.userId]);
+      await insertShare(c, share, a.id);
+      await audit(c, { actorId: a.id, action: "item.shared", targetType: "user", targetId: share.userId, containerId: it.container_id, ip: req.ip, details: { itemId: id } });
+      return { notify: !existed.rowCount };
+    });
+    if (r.notify) {
+      const u = await db.query("SELECT id, email, display_name FROM users WHERE id = ANY($1::uuid[])", [[a.id, share.userId]]);
+      const actor = u.rows.find((x) => x.id === a.id);
+      const rec = u.rows.find((x) => x.id === share.userId);
+      if (actor && rec) {
+        await ctx.mailer.send(rec.email, "Ti è stata condivisa una password su StartCredentials",
+          `${actor.display_name} ha condiviso con te una password in sola lettura. Per sicurezza i dettagli non vengono scritti nelle email: la trovi nell'estensione, in «Condivisi con me».\n\n${cfg.publicUrl}\n`);
+      }
+    }
+    return { ok: true };
+  });
+
+  app.get("/api/v1/items/:id/shares", async (req) => {
+    const a = requireAuth(req);
+    const { id } = z.object({ id: uuid }).parse(req.params);
+    const containerId = await itemContainer(db, id);
+    await requirePermission(db, containerId, a.id, "manage");
+    const r = await db.query(
+      `SELECT sh.user_id, u.display_name, u.email, sh.created_at FROM item_shares sh JOIN users u ON u.id = sh.user_id
+        WHERE sh.item_id = $1 ORDER BY u.display_name`, [id]);
+    return r.rows.map((x) => ({ userId: x.user_id, displayName: x.display_name, email: x.email, since: x.created_at }));
+  });
+
+  app.delete("/api/v1/items/:id/shares/:userId", async (req) => {
+    const a = requireAuth(req);
+    const { id, userId } = z.object({ id: uuid, userId: uuid }).parse(req.params);
+    return tx(db, async (c) => {
+      const containerId = await itemContainer(c, id);
+      await requirePermission(c, containerId, a.id, "manage");
+      const r = await c.query("DELETE FROM item_shares WHERE item_id = $1 AND user_id = $2", [id, userId]);
+      if (!r.rowCount) throw notFound("share_not_found");
+      // La chiave dell'elemento era nota al destinatario: va sostituita.
+      await c.query("UPDATE items SET rekey_required = true WHERE id = $1", [id]);
+      await audit(c, { actorId: a.id, action: "item.unshared", targetType: "user", targetId: userId, containerId, ip: req.ip, details: { itemId: id } });
+      return { ok: true, rekeyRequired: true };
+    });
+  });
+
+  /** Elementi condivisi con l'utente, con la chiave sigillata per lui. */
+  app.get("/api/v1/shared-items", async (req) => {
+    const a = requireAuth(req);
+    const r = await db.query(
+      `SELECT i.id, i.container_id, i.type, i.data_enc, i.ik_version, i.updated_at, sh.sealed_key, sh.granted_by, sh.signature, sh.ik_version AS share_version,
+              g.display_name AS shared_by
+         FROM item_shares sh JOIN items i ON i.id = sh.item_id AND i.deleted_at IS NULL AND sh.ik_version = i.ik_version
+         JOIN containers c ON c.id = i.container_id AND c.deleted_at IS NULL
+         JOIN users g ON g.id = sh.granted_by
+        WHERE sh.user_id = $1 ORDER BY i.updated_at DESC`, [a.id]);
+    const att = r.rowCount ? await db.query(
+      "SELECT id, item_id, fk_enc, meta_enc, header, size, chunk_count FROM attachments WHERE item_id = ANY($1::uuid[]) AND status = 'ready'", [r.rows.map((x) => x.id)]) : { rows: [] };
+    return r.rows.map((x) => ({
+      id: x.id, containerId: x.container_id, type: x.type, dataEnc: x.data_enc, ikVersion: x.ik_version, updatedAt: x.updated_at, sharedBy: x.shared_by,
+      share: { itemId: x.id, containerId: x.container_id, ikVersion: x.share_version, userId: a.id, sealedKey: x.sealed_key, grantedBy: x.granted_by, signature: x.signature },
+      attachments: att.rows.filter((t) => t.item_id === x.id).map((t) => ({ id: t.id, fkEnc: t.fk_enc, metaEnc: t.meta_enc, header: t.header, size: Number(t.size), chunkCount: t.chunk_count })),
+    }));
+  });
+
+  /** Elementi che attendono la ricifratura (revoche), nei clienti gestiti dall'utente. */
+  app.get("/api/v1/items/rekey-pending", async (req) => {
+    const a = requireAuth(req);
+    const r = await db.query(`SELECT i.id, i.container_id FROM items i WHERE i.rekey_required AND i.container_id IN (${ACCESSIBLE_CONTAINERS})`, [a.id]);
+    const out = [];
+    for (const x of r.rows) if ((await permissionOf(db, x.container_id, a.id))?.permission === "manage") out.push({ itemId: x.id, containerId: x.container_id });
+    return out;
+  });
+
+  /**
+   * Ricifratura di un elemento con una chiave nuova: dati, versioni precedenti,
+   * chiavi degli allegati e consegne ai destinatari rimasti, tutto insieme.
+   */
+  app.post("/api/v1/items/:id/rekey", async (req) => {
+    const a = requireAuth(req);
+    const { id } = z.object({ id: uuid }).parse(req.params);
+    const body = z.object({
+      ikVersion: z.number().int().min(2),
+      ikEnc: envelope, dataEnc: envelope, revision: z.number().int().min(1),
+      versions: z.array(z.object({ revision: z.number().int().min(1), dataEnc: envelope })).max(50),
+      attachments: z.array(z.object({ id: uuid, fkEnc: envelope, metaEnc: envelope })).max(1000),
+      shares: z.array(shareSchema).max(500),
+    }).parse(req.body);
+    return tx(db, async (c) => {
+      const it = (await c.query("SELECT container_id, ik_version, revision, ik_key_version FROM items WHERE id = $1 FOR UPDATE", [id])).rows[0];
+      if (!it) throw notFound("item_not_found");
+      const p = await requirePermission(c, it.container_id, a.id, "manage");
+      if (body.ikVersion !== it.ik_version + 1) throw conflict("stale_item_key");
+      if (body.revision !== it.revision) throw conflict("revision_conflict");
+      if (it.ik_key_version !== p.keyVersion) throw conflict("stale_key_version");
+      const versions = await c.query("SELECT revision FROM item_versions WHERE item_id = $1", [id]);
+      if (versions.rowCount !== body.versions.length || versions.rows.some((v) => !body.versions.some((b) => b.revision === v.revision))) throw badRequest("versions_must_match");
+      const atts = await c.query("SELECT id FROM attachments WHERE item_id = $1", [id]);
+      if (atts.rowCount !== body.attachments.length || atts.rows.some((x) => !body.attachments.some((b) => b.id === x.id))) throw badRequest("attachments_must_match");
+      const shares = await c.query("SELECT user_id FROM item_shares WHERE item_id = $1", [id]);
+      if (shares.rowCount !== body.shares.length || shares.rows.some((x) => !body.shares.some((b) => b.userId === x.user_id))) throw badRequest("shares_must_match");
+      await c.query("UPDATE items SET ik_enc = $2, data_enc = $3, ik_version = $4, rekey_required = false, updated_at = now() WHERE id = $1",
+        [id, body.ikEnc, body.dataEnc, body.ikVersion]);
+      for (const v of body.versions) await c.query("UPDATE item_versions SET data_enc = $3 WHERE item_id = $1 AND revision = $2", [id, v.revision, v.dataEnc]);
+      for (const x of body.attachments) await c.query("UPDATE attachments SET fk_enc = $2, meta_enc = $3 WHERE id = $1", [x.id, x.fkEnc, x.metaEnc]);
+      for (const sh of body.shares) {
+        if (sh.itemId !== id || sh.containerId !== it.container_id || sh.ikVersion !== body.ikVersion) throw badRequest("shares_must_match");
+        await insertShare(c, sh, a.id);
+      }
+      await audit(c, { actorId: a.id, action: "item.rekeyed", targetType: "item", targetId: id, containerId: it.container_id, ip: req.ip, details: { ikVersion: body.ikVersion } });
+      return { ok: true, ikVersion: body.ikVersion };
+    });
   });
 
   // ------------------------------------------------------------ allegati
@@ -235,7 +406,7 @@ export async function itemRoutes(app: FastifyInstance, ctx: Ctx) {
     const a = requireAuth(req);
     const { id, n } = z.object({ id: uuid, n: z.coerce.number().int().min(0) }).parse(req.params);
     const at = await attachmentFor(db, id);
-    await requirePermission(db, at.container_id, a.id, "read");
+    if (!(await permissionOf(db, at.container_id, a.id)) && !(await sharedWith(db, at.item_id, a.id))) throw notFound("container_not_found");
     if (at.status !== "ready" || n >= at.chunk_count) throw notFound();
     return reply.type("application/octet-stream").send(await readFile(chunkPath(id, n)));
   });

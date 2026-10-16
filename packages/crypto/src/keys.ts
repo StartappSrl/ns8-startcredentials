@@ -139,3 +139,33 @@ export function verifyUserCertification(
 ): void {
   assertSignature(keyCertificationMessage(userId, keyVersion, pub), certification, orgSignPublic, "certificazione chiave utente");
 }
+
+// ------------------------------------------------------------------ rotazione della chiave dell'organizzazione
+
+export interface OrgRotation {
+  version: number;
+  oldSignPublic: string;
+  newSignPublic: string;
+  newRecoveryPublic: string;
+  signature: string;
+}
+
+/** Messaggio firmato con la chiave vecchia per annunciare la nuova. */
+export function orgRotationMessage(r: Omit<OrgRotation, "signature">): Uint8Array {
+  return utf8(`sc:org-rotation:v1|${r.version}|${r.oldSignPublic}|${r.newSignPublic}|${r.newRecoveryPublic}`);
+}
+
+/**
+ * Verifica che dalla chiave fissata dal client si arrivi a quella presentata
+ * dal server attraverso rotazioni ciascuna firmata dalla chiave precedente.
+ */
+export function verifyOrgChain(pinned: string, current: string, rotations: OrgRotation[]): boolean {
+  let key = pinned;
+  for (const r of [...rotations].sort((a, b) => a.version - b.version)) {
+    if (key === current) break;
+    if (r.oldSignPublic !== key) continue;
+    if (!verify(orgRotationMessage(r), r.signature, key)) return false;
+    key = r.newSignPublic;
+  }
+  return key === current;
+}

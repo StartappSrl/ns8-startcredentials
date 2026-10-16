@@ -181,3 +181,37 @@ test("gruppi: certificazione, consegna ai membri, contenitore condiviso col grup
   assert.deepEqual(openGroupContainerKey(gg, g.boxPublic, priv, admin.keys.publicKeys.sign), ck);
   assert.throws(() => openGroupContainerKey({ ...gg, permission: "manage" }, g.boxPublic, priv, admin.keys.publicKeys.sign), isCode("invalid_signature"));
 });
+
+test("rotazione della chiave dell'organizzazione: catena firmata accettata, catena falsa respinta", async () => {
+  const { orgRotationMessage, verifyOrgChain, sign } = await import("../src/index.js");
+  const k1 = generateUserKeys(), k2 = generateUserKeys(), k3 = generateUserKeys(), evil = generateUserKeys();
+  const rec = generateUserKeys().publicKeys.box;
+  const step = (v: number, from: typeof k1, to: typeof k1) => {
+    const r = { version: v, oldSignPublic: from.publicKeys.sign, newSignPublic: to.publicKeys.sign, newRecoveryPublic: rec };
+    return { ...r, signature: sign(orgRotationMessage(r), from.signPrivate) };
+  };
+  const chain = [step(2, k1, k2), step(3, k2, k3)];
+  assert.equal(verifyOrgChain(k1.publicKeys.sign, k3.publicKeys.sign, chain), true);
+  assert.equal(verifyOrgChain(k2.publicKeys.sign, k3.publicKeys.sign, chain), true);
+  assert.equal(verifyOrgChain(k1.publicKeys.sign, k1.publicKeys.sign, chain), true);
+  // Un server compromesso non può inserire una chiave sua: la firma non viene dalla chiave fissata.
+  const forged = { version: 2, oldSignPublic: k1.publicKeys.sign, newSignPublic: evil.publicKeys.sign, newRecoveryPublic: rec };
+  assert.equal(verifyOrgChain(k1.publicKeys.sign, evil.publicKeys.sign, [{ ...forged, signature: sign(orgRotationMessage(forged), evil.signPrivate) }]), false);
+  assert.equal(verifyOrgChain(k1.publicKeys.sign, evil.publicKeys.sign, []), false);
+  // Nemmeno alterando la chiave di recupero annunciata.
+  assert.equal(verifyOrgChain(k1.publicKeys.sign, k2.publicKeys.sign, [{ ...chain[0]!, newRecoveryPublic: evil.publicKeys.box }]), false);
+});
+
+test("condivisione di un singolo elemento: firma, versione della chiave, destinatario", async () => {
+  const { shareItemKey, openItemShare, encryptItem, openItemKey } = await import("../src/index.js");
+  const marco = { userId: "marco", keys: generateUserKeys() };
+  const sara = { userId: "sara", keys: generateUserKeys() };
+  const ck = newContainerKey();
+  const enc = encryptItem(ck, 1, "c1", "i1", { type: "login", name: "x", password: "p" });
+  const ik = openItemKey(ck, "c1", "i1", enc.ikEnc);
+  const share = shareItemKey({ itemKey: ik, itemId: "i1", containerId: "c1", ikVersion: 1, userId: "sara", userBoxPublic: sara.keys.publicKeys.box, grantor: marco });
+  assert.deepEqual(openItemShare(share, sara, marco.keys.publicKeys.sign), ik);
+  assert.throws(() => openItemShare({ ...share, ikVersion: 2 }, sara, marco.keys.publicKeys.sign), isCode("invalid_signature"));
+  assert.throws(() => openItemShare({ ...share, itemId: "altro" }, sara, marco.keys.publicKeys.sign), isCode("invalid_signature"));
+  assert.throws(() => openItemShare(share, { userId: "sara", keys: generateUserKeys() }, marco.keys.publicKeys.sign), isCode("decryption_failed"));
+});

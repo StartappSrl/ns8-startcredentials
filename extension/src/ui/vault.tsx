@@ -85,7 +85,7 @@ export function Clients({ vault, containers, reload, shared }: { vault: Vault; c
           <input class="input" type="search" placeholder="Cerca clienti…" value={q} onInput={(e) => setQ(e.currentTarget.value)} />
         </label>
         <a class="btn" href="#/import">Importa</a>
-        {!shared && <button class="btn primary" onClick={() => setCreating(true)}>Nuovo cliente</button>}
+        {!shared && vault.me.role === "admin" && <button class="btn primary" onClick={() => setCreating(true)}>Nuovo cliente</button>}
       </div>
       <div class="row between">
         <div class="stack" style="gap:4px">
@@ -101,7 +101,8 @@ export function Clients({ vault, containers, reload, shared }: { vault: Vault; c
       {list.length === 0 ? (
         <div class="card empty">
           <h3>{q ? "Nessun cliente corrisponde alla ricerca" : shared ? "Nessun cliente condiviso con te" : "Non hai ancora clienti"}</h3>
-          {!shared && !q && <button class="btn primary" onClick={() => setCreating(true)}>Crea il primo cliente</button>}
+          {!shared && !q && vault.me.role === "admin" && <button class="btn primary" onClick={() => setCreating(true)}>Crea il primo cliente</button>}
+          {!shared && !q && vault.me.role !== "admin" && <p class="small">I clienti li crea un amministratore: quando ne condividerà uno con te, lo troverai qui.</p>}
         </div>
       ) : (
         <div class="grid">
@@ -180,6 +181,8 @@ export function ContainerView({ vault, id, focusItem, onChanged }: { vault: Vaul
   const [selecting, setSelecting] = useState(false);
   const [checked, setChecked] = useState<Set<string>>(new Set());
   const [confirmBulk, setConfirmBulk] = useState(false);
+  const [moveOpen, setMoveOpen] = useState(false);
+  const [moveTarget, setMoveTarget] = useState("");
   const bulk = useAction();
   useEffect(() => { setChecked(new Set()); }, [tab, id]);
   useEffect(() => { void loadCollapsed(id).then((ids) => setCollapsed(new Set(ids))); }, [id]);
@@ -187,6 +190,17 @@ export function ContainerView({ vault, id, focusItem, onChanged }: { vault: Vaul
   const items = useLoad(() => vault.items(id, { trash: tab === "trash" }), [id, tab === "trash"]);
   const toast = useToast();
   // Arrivo da ricerca o rapporto: seleziona l'elemento, apre le sue cartelle e lo porta in vista.
+  // Cambiamenti fatti dai colleghi su questo cliente: si ricarica, salvo durante una modifica.
+  useEffect(() => {
+    const onChanges = (e: Event) => {
+      const ids = (e as CustomEvent<string[]>).detail ?? [];
+      if (!ids.includes(id) || editing) return;
+      items.reload();
+      info.reload();
+    };
+    window.addEventListener("sc-changes", onChanges);
+    return () => window.removeEventListener("sc-changes", onChanges);
+  }, [id, editing]);
   const focused = useRef<string | null>(null);
   useEffect(() => {
     if (!focusItem || focused.current === focusItem || !items.data || !info.data) return;
@@ -258,6 +272,13 @@ export function ContainerView({ vault, id, focusItem, onChanged }: { vault: Vaul
     });
   };
   const endSelection = () => { setSelecting(false); setChecked(new Set()); };
+  const runMove = () => bulk.run(async () => {
+    const n = await vault.moveItems(id, [...checked], moveTarget || null);
+    setMoveOpen(false);
+    endSelection();
+    reloadAll();
+    toast(`${n} ${n === 1 ? "elemento spostato" : "elementi spostati"}`);
+  });
   const runBulk = (action: "delete" | "restore") => bulk.run(async () => {
     const ids = [...checked];
     const n = action === "delete" ? await vault.deleteItems(id, ids) : await vault.restoreItems(id, ids);
@@ -383,7 +404,12 @@ export function ContainerView({ vault, id, focusItem, onChanged }: { vault: Vaul
               <button class="btn sm ghost" disabled={!checked.size} onClick={() => setChecked(new Set())}>Deseleziona</button>
               {tab === "trash"
                 ? <button class="btn sm primary" disabled={!checked.size || bulk.busy} onClick={() => runBulk("restore")}>Ripristina</button>
-                : <button class="btn sm danger" disabled={!checked.size || bulk.busy} onClick={() => setConfirmBulk(true)}>Sposta nel cestino</button>}
+                : (
+                  <>
+                    <button class="btn sm" disabled={!checked.size || bulk.busy} onClick={() => { setMoveTarget(""); setMoveOpen(true); }}>Sposta in cartella</button>
+                    <button class="btn sm danger" disabled={!checked.size || bulk.busy} onClick={() => setConfirmBulk(true)}>Sposta nel cestino</button>
+                  </>
+                )}
               <button class="btn sm" onClick={endSelection}>Fine</button>
             </div>
           )}
@@ -402,7 +428,7 @@ export function ContainerView({ vault, id, focusItem, onChanged }: { vault: Vaul
         </section>
         <aside class="detail">
           {sel ? (
-            <ItemDetail key={sel.id} vault={vault} item={sel} canWrite={canWrite} folders={c.folders}
+            <ItemDetail key={sel.id} vault={vault} item={sel} canWrite={canWrite} canShare={canManage && c.kind === "client"} folders={c.folders}
               onEdit={() => setEditing(sel)} onChanged={reloadAll}
               onDeleted={() => { setSelected(null); reloadAll(); toast(tab === "trash" ? "Elemento ripristinato" : "Elemento spostato nel cestino"); }} />
           ) : (
@@ -413,6 +439,21 @@ export function ContainerView({ vault, id, focusItem, onChanged }: { vault: Vaul
 
       {editing && <ItemEditor vault={vault} containerId={id} folders={c.folders} item={editing === "new" ? undefined : editing}
         onClose={() => setEditing(null)} onSaved={(iid) => { setEditing(null); setSelected(iid); reloadAll(); toast("Salvato"); }} />}
+      {moveOpen && (
+        <Dialog title={`Spostare ${checked.size} ${checked.size === 1 ? "elemento" : "elementi"}`} onClose={() => setMoveOpen(false)}>
+          <label class="field">Nella cartella
+            <select class="input" value={moveTarget} onChange={(e) => setMoveTarget(e.currentTarget.value)}>
+              <option value="">Nessuna cartella</option>
+              {[...c.folders].sort((a, b) => folderPath(c.folders, a.id).localeCompare(folderPath(c.folders, b.id), "it")).map((f) => <option value={f.id}>{folderPath(c.folders, f.id)}</option>)}
+            </select>
+          </label>
+          <ErrorNote error={bulk.error} />
+          <div class="row" style="justify-content:flex-end">
+            <button class="btn" onClick={() => setMoveOpen(false)}>Annulla</button>
+            <button class="btn primary" disabled={bulk.busy} onClick={runMove}>{bulk.busy ? "Spostamento…" : "Sposta"}</button>
+          </div>
+        </Dialog>
+      )}
       {confirmBulk && (
         <Dialog title={`Spostare ${checked.size} ${checked.size === 1 ? "elemento" : "elementi"} nel cestino?`} onClose={() => setConfirmBulk(false)}>
           <p>Restano recuperabili dal Cestino per 30 giorni, poi vengono eliminati definitivamente. Gli altri membri del cliente non li vedranno più.</p>
@@ -500,10 +541,11 @@ export function folderPath(folders: Folder[], id: string | null): string {
 
 // ------------------------------------------------------------------ dettaglio elemento
 
-function ItemDetail({ vault, item, canWrite, folders, onEdit, onChanged, onDeleted }: {
-  vault: Vault; item: Item; canWrite: boolean; folders: Folder[]; onEdit: () => void; onChanged: () => void; onDeleted: () => void;
+export function ItemDetail({ vault, item, canWrite, canShare, folders, onEdit, onChanged, onDeleted }: {
+  vault: Vault; item: Item; canWrite: boolean; canShare?: boolean; folders: Folder[]; onEdit: () => void; onChanged: () => void; onDeleted: () => void;
 }) {
   const d = item.data;
+  const [sharing, setSharing] = useState(false);
   const [history, setHistory] = useState(false);
   const [progress, setProgress] = useState<string | null>(null);
   const { error, run } = useAction();
@@ -580,13 +622,16 @@ function ItemDetail({ vault, item, canWrite, folders, onEdit, onChanged, onDelet
       <ErrorNote error={error} />
       <div class="row">
         {canWrite && !item.deletedAt && <button class="btn sm" onClick={onEdit}>Modifica</button>}
-        <button class="btn sm" onClick={() => setHistory(true)}>Cronologia</button>
+        {!item.sharedBy && <button class="btn sm" onClick={() => setHistory(true)}>Cronologia</button>}
+        {canShare && !item.deletedAt && <button class="btn sm" onClick={() => setSharing(true)}>Condividi solo questa password{item.shares ? ` (${item.shares})` : ""}</button>}
         {canWrite && (item.deletedAt
           ? <button class="btn sm" onClick={() => run(async () => { await vault.restoreItem(item.id); onDeleted(); })}>Ripristina</button>
           : <button class="btn sm ghost danger" onClick={() => run(async () => { await vault.deleteItem(item.id); onDeleted(); })}>Sposta nel cestino</button>)}
       </div>
       <div class="small muted">Modificato da {item.updatedBy} · {relTime(item.updatedAt)} · revisione {item.revision}</div>
       {history && <HistoryDialog vault={vault} item={item} onClose={() => setHistory(false)} />}
+      {sharing && <ItemShareDialog vault={vault} item={item} onClose={() => { setSharing(false); onChanged(); }} />}
+      {item.sharedBy && <div class="notice info">Condivisa con te da {item.sharedBy}, in sola lettura.</div>}
     </div>
   );
 }
@@ -782,6 +827,95 @@ function ShareDialog({ vault, container, onClose }: { vault: Vault; container: C
         </Dialog>
       )}
     </Dialog>
+  );
+}
+
+function ItemShareDialog({ vault, item, onClose }: { vault: Vault; item: Item; onClose: () => void }) {
+  const shares = useLoad(() => vault.itemShares(item.id), [item.id]);
+  const dir = useLoad(() => vault.directory(true), []);
+  const [pick, setPick] = useState("");
+  const [confirm, setConfirm] = useState<{ userId: string; name: string } | null>(null);
+  const { busy, error, run } = useAction();
+  const toast = useToast();
+  const candidates = (dir.data ?? []).filter((u) => u.status === "active" && u.id !== vault.me.id && !shares.data?.some((x) => x.userId === u.id));
+  const chosen = candidates.find((u) => u.id === pick);
+  return (
+    <Dialog title={`Condividi «${item.data.name}»`} onClose={onClose}>
+      <p class="small muted">Il collega vede solo questa password, in sola lettura, anche senza accesso al cliente. Per dargli tutto il cliente usa invece «Condividi» in alto.</p>
+      <div class="row" style="flex-wrap:nowrap;align-items:flex-end">
+        <label class="field grow">Collega
+          <select class="input" value={pick} onChange={(e) => setPick(e.currentTarget.value)}>
+            <option value="">Scegli…</option>
+            {candidates.map((u) => <option value={u.id}>{u.displayName} ({u.email}){u.verified ? "" : " – chiave non certificata"}</option>)}
+          </select>
+        </label>
+        <button class="btn primary" disabled={busy || !chosen?.verified} onClick={() => run(async () => {
+          await vault.shareItem(item, pick);
+          setPick("");
+          shares.reload();
+          toast("Password condivisa");
+        })}>Condividi</button>
+      </div>
+      {chosen && !chosen.verified && <div class="notice warn">La chiave di {chosen.displayName} va prima certificata da un amministratore.</div>}
+      {(shares.data ?? []).length > 0 && (
+        <div class="card">
+          {shares.data!.map((x) => (
+            <div class="row" style="padding:10px 14px;border-bottom:1px solid var(--line);flex-wrap:nowrap">
+              <div class="avatar">{initials(x.displayName)}</div>
+              <div class="grow"><div style="font-weight:500">{x.displayName}</div><div class="small muted">{x.email}</div></div>
+              <button class="btn sm ghost danger" onClick={() => setConfirm({ userId: x.userId, name: x.displayName })}>Rimuovi</button>
+            </div>
+          ))}
+        </div>
+      )}
+      <ErrorNote error={error} />
+      {confirm && (
+        <Dialog title={`Togliere la password a ${confirm.name}?`} onClose={() => setConfirm(null)}>
+          <p>La password viene ricifrata con una chiave nuova, cronologia e allegati compresi. Se {confirm.name} l'ha già vista, conviene cambiarla anche sul servizio.</p>
+          <ErrorNote error={error} />
+          <div class="row" style="justify-content:flex-end">
+            <button class="btn" onClick={() => setConfirm(null)}>Annulla</button>
+            <button class="btn primary" disabled={busy} onClick={() => run(async () => {
+              await vault.unshareItem(item, confirm.userId);
+              setConfirm(null);
+              shares.reload();
+              toast("Condivisione rimossa e password ricifrata");
+            })}>{busy ? "Ricifratura…" : "Rimuovi"}</button>
+          </div>
+        </Dialog>
+      )}
+    </Dialog>
+  );
+}
+
+/** Password condivise singolarmente con l'utente (sola lettura). */
+export function SharedItems({ vault, focus }: { vault: Vault; focus?: string }) {
+  const items = useLoad(() => vault.sharedWithMe(), []);
+  const [selected, setSelected] = useState<string | null>(focus ?? null);
+  useEffect(() => { if (focus) setSelected(focus); }, [focus]);
+  if (!items.data?.length) return null;
+  const sel = items.data.find((i) => i.id === selected) ?? null;
+  return (
+    <>
+      <h2>Password condivise con te</h2>
+      <div class="split">
+        <section class="card list" aria-label="Password condivise con te">
+          {items.data.map((i) => (
+            <button class={`item-row${i.id === selected ? " on" : ""}`} data-item={i.id} onClick={() => setSelected(i.id)}>
+              <span class="kind">{TYPE_TAG[i.type]}</span>
+              <span class="grow">
+                <span class="ellipsis" style="display:block;font-weight:500">{i.data.name}</span>
+                <span class="ellipsis small muted" style="display:block">da {i.sharedBy}{i.data.username ? ` · ${i.data.username}` : ""}</span>
+              </span>
+            </button>
+          ))}
+        </section>
+        <aside class="detail">
+          {sel ? <ItemDetail key={sel.id} vault={vault} item={sel} canWrite={false} folders={[]} onEdit={() => undefined} onChanged={items.reload} onDeleted={items.reload} />
+               : <div class="card empty"><p>Seleziona una password per vederne i dettagli.</p></div>}
+        </aside>
+      </div>
+    </>
   );
 }
 

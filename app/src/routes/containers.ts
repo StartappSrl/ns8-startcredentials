@@ -183,6 +183,22 @@ export async function loadContainers(db: Db | Tx, userId: string, onlyId?: strin
   });
 }
 
+const PERM_IT: Record<Permission, string> = { read: "sola lettura", write: "modifica", manage: "gestione" };
+
+/**
+ * Avviso email di un nuovo accesso. Il server non conosce il nome del cliente
+ * (è cifrato), quindi l'email non lo contiene: si trova in "Condivisi con me".
+ */
+async function notifyShare(ctx: Ctx, actorId: string, recipientId: string, permission: Permission) {
+  const r = await ctx.db.query("SELECT id, email, display_name FROM users WHERE id = ANY($1::uuid[])", [[actorId, recipientId]]);
+  const actor = r.rows.find((x) => x.id === actorId);
+  const rec = r.rows.find((x) => x.id === recipientId);
+  if (!actor || !rec) return;
+  await ctx.mailer.send(rec.email, "Nuovo accesso su StartCredentials",
+    `${actor.display_name} ti ha dato accesso a un cliente su StartCredentials, con permesso di ${PERM_IT[permission]}.\n\n` +
+    `Per sicurezza il nome del cliente non viene scritto nelle email: lo trovi nell'estensione, nella sezione «Condivisi con me».\n\n${ctx.cfg.publicUrl}\n`);
+}
+
 export async function containerRoutes(app: FastifyInstance, ctx: Ctx) {
   const { db } = ctx;
 
@@ -206,6 +222,8 @@ export async function containerRoutes(app: FastifyInstance, ctx: Ctx) {
     if (body.grant.containerId !== body.id || body.grant.recipientId !== a.id || body.grant.keyVersion !== 1 || body.grant.permission !== "manage") {
       throw badRequest("invalid_grant");
     }
+    // Policy aziendale: i clienti li creano solo gli amministratori; l'area personale tutti.
+    if (body.kind === "client" && a.role !== "admin") throw forbidden("admin_required");
     return tx(db, async (c) => {
       if (body.kind === "personal") {
         const ex = await c.query("SELECT 1 FROM containers WHERE kind = 'personal' AND created_by = $1 AND deleted_at IS NULL", [a.id]);
@@ -271,8 +289,12 @@ export async function containerRoutes(app: FastifyInstance, ctx: Ctx) {
         if (grant.permission !== "manage") throw badRequest("org_requires_manage");
       }
       if (grant.permission !== "manage" && (await managersLeft(c, id, p.keyVersion, grant.recipientId)) === 0) throw conflict("last_manager");
+      const existed = await c.query("SELECT 1 FROM container_keys WHERE container_id = $1 AND key_version = $2 AND user_id = $3", [id, p.keyVersion, grant.recipientId]);
       await insertGrant(c, grant, a.id);
       await audit(c, { actorId: a.id, action: "container.member_set", targetType: "user", targetId: grant.recipientId, containerId: id, ip: req.ip, details: { permission: grant.permission } });
+      return { ok: true, notify: !existed.rowCount && grant.recipientId !== a.id && p.kind === "client" };
+    }).then(async (r) => {
+      if (r.notify) await notifyShare(ctx, a.id, grant.recipientId, grant.permission);
       return { ok: true };
     });
   });

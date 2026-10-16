@@ -73,6 +73,24 @@ un cliente condiviso con un gruppo è visibile a tutti i suoi membri. Chi esce
 dal gruppo perde subito l'accesso; la chiave del gruppo e quelle dei clienti
 vengono ruotate. I gruppi sono gestiti dagli amministratori che ne fanno parte.
 
+Organizzazione: la chiave di firma si può ruotare (es. dopo l'uscita di un
+amministratore); la rotazione è firmata con la chiave precedente e le estensioni
+la seguono da sole, mentre una chiave non firmata viene respinta.
+
+Estensione: icona nei campi di accesso e proposta di salvare o aggiornare le
+password usate sui siti (facoltative); selezione multipla con cestino,
+ripristino e sposta in cartella; notifiche email di nuovi accessi.
+
+Condivisione di una singola password (sola lettura) con chi non vede il
+cliente; alla revoca la password viene ricifrata con una chiave nuova.
+Aggiornamenti automatici: ogni 20 secondi l'estensione rileva i cambiamenti
+fatti dai colleghi. Export cifrato con gli allegati. Registro di audit con
+conservazione configurabile (`AUDIT_RETENTION_MONTHS`, predefinito 24 mesi)
+senza perdere la verificabilità della catena.
+
+Policy: i clienti li creano solo gli amministratori (anche tramite import);
+tutti hanno la propria area personale.
+
 Account: MFA obbligatoria con 10 codici di riserva, cambio della master
 password, recupero con 2 quote su 3. Amministrazione: inviti, certificazione
 delle chiavi, reset dell'MFA, uscita di un collega con rimozione immediata di
@@ -99,19 +117,21 @@ Serve Node.js 22 e un PostgreSQL di test (`TEST_DATABASE_URL`, predefinito `post
 
 ```
 npm ci
-npm test -w packages/crypto          # 14 test del core crittografico
+npm test -w packages/crypto          # 16 test del core crittografico
 npm run build -w packages/client
-npm test -w app                      # 17 scenari end-to-end su server e database reali
+npm test -w app                      # 22 scenari end-to-end su server e database reali
 npm run build -w extension           # produce extension/startcredentials-extension.zip
-npm run test:ui -w extension         # 26 passaggi dell'interfaccia (jsdom + server reale)
+npm run test:ui -w extension         # 27 passaggi dell'interfaccia (jsdom + server reale)
 npm run test:import -w extension     # import con il pacchetto per browser (KeePass reale, CSV, 1Password)
-npm run test:inline -w extension     # icona nei campi di accesso
+npm run test:inline -w extension     # icona nei campi e cattura degli accessi
+npm run test:popup -w extension      # popup: aggiornamento, salvataggio, compilazione
+npm run test:site -w extension       # riconoscimento dell'estensione sulla pagina del server
 ./build-images.sh                    # immagini del modulo e dell'applicazione (buildah)
 ```
 
 ## Stato
 
-Versione 0.3.0. Fasi 0, 1 e 2 implementate e testate; l'app mobile (fase 3) non
+Versione 0.5.0. Fasi 0, 1 e 2 implementate e testate; l'app mobile (fase 3) non
 è ancora iniziata. Prima dell'uso in produzione servono un
 penetration test esterno e una revisione indipendente della crittografia.
 L'app mobile (fase 3) userà `packages/crypto` e `packages/client`.

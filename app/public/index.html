@@ -5,24 +5,24 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>StartCredentials</title>
 
-<style>
-:root{color-scheme:light dark;--bg:#F4F8FD;--card:#fff;--ink:#0B1B2E;--muted:#536780;--line:#E1E9F3;--accent:#0068CF}
-@media (prefers-color-scheme:dark){:root{--bg:#08172A;--card:#0F223A;--ink:#EEF4FB;--muted:#93A8C0;--line:#1E3654;--accent:#3D96F0}.logo{background:#fff;padding:6px 10px;border-radius:8px}}
-main{border-top:4px solid var(--accent)}.logo{height:34px;display:block;margin-bottom:12px}
-body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.55 system-ui,-apple-system,"Segoe UI",sans-serif;display:flex;min-height:100vh;align-items:center;justify-content:center;padding:24px;box-sizing:border-box}
-main{max-width:560px;background:var(--card);border:1px solid var(--line);border-radius:16px;padding:32px}
-h1{margin:0 0 8px;font-size:26px}p{color:var(--muted)}a.btn{display:inline-block;margin-top:8px;padding:12px 18px;border-radius:10px;background:var(--accent);color:#fff;text-decoration:none;font-weight:600}
-code{background:var(--bg);padding:2px 6px;border-radius:6px}
-</style>
+<link rel="stylesheet" href="/site.css?v=__VERSION__">
 </head>
 <body>
 <main>
-<img class="logo" src="/startapp-logo.png" alt="StartApp">
+<img class="logo" src="/startapp-logo.png?v=__VERSION__" alt="StartApp">
 <h1>StartApp Credentials</h1>
-<p>Per motivi di sicurezza StartCredentials si usa solo dall'estensione per Chrome o Edge (e in futuro dall'app mobile): la cifratura avviene lì, mai in una pagina scaricata dal server.</p>
-<p>Se hai ricevuto un invito, installa l'estensione e apri di nuovo il collegamento dell'invito: l'estensione lo riconosce in automatico. In alternativa incolla il codice di invito nella schermata di configurazione dell'estensione.</p>
+<p>Per motivi di sicurezza StartCredentials si usa solo dall'estensione per Chrome o Edge: la cifratura avviene lì, mai in una pagina scaricata dal server.</p>
+<section id="sc-installed" hidden>
+<p class="ok">L'estensione StartCredentials è installata su questo browser.</p>
+<p id="sc-invite" hidden>Hai aperto un collegamento <span id="sc-invite-kind">di invito</span>: puoi completarlo direttamente nell'estensione.</p>
+<p><button id="sc-accept" class="btn" type="button" hidden>Continua nell'estensione</button> <button id="sc-open" class="btn" type="button">Apri StartCredentials</button></p>
+</section>
+<section id="sc-install">
+<p>Se hai ricevuto un invito, installa l'estensione e apri di nuovo il collegamento: l'estensione lo riconosce. In alternativa incolla il collegamento nella schermata iniziale dell'estensione.</p>
+<p>Se l'estensione è già installata ma questa pagina non la riconosce, aprila e collegala a questo indirizzo: dopo il primo accesso la pagina la riconoscerà.</p>
 <p>Normalmente l'estensione viene installata dal reparto IT tramite Chrome Web Store, Edge Add-ons o criteri di gruppo, e si aggiorna da sola.</p>
 <p><a href="/download/startcredentials-extension.zip">Versione per le prove</a>: da caricare in modalità sviluppatore (<code>chrome://extensions</code> → «Carica estensione non pacchettizzata»). Non si aggiorna da sola e non va usata con dati reali.</p>
+</section>
 <p><a href="/privacy">Informativa privacy</a></p>
 </main>
 </body>

@@ -24,8 +24,8 @@ export interface EncryptedItem {
   dataEnc: string;
 }
 
-const ikContext = (containerId: string, itemId: string) => `sc:item-key:v1:${containerId}:${itemId}`;
-const dataContext = (containerId: string, itemId: string) => `sc:item-data:v1:${containerId}:${itemId}`;
+export const ikContext = (containerId: string, itemId: string) => `sc:item-key:v1:${containerId}:${itemId}`;
+export const dataContext = (containerId: string, itemId: string) => `sc:item-data:v1:${containerId}:${itemId}`;
 
 export function encryptItem(
   containerKey: Uint8Array,

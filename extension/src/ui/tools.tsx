@@ -4,11 +4,16 @@ import { relTime } from "../shared";
 import { ErrorNote, useLoad } from "./kit";
 
 /** Tutti gli elementi leggibili, decifrati in locale. */
-async function loadAll(vault: Vault): Promise<HealthEntry[]> {
+async function loadAll(vault: Vault, withShared = false): Promise<HealthEntry[]> {
   const out: HealthEntry[] = [];
   for (const c of await vault.containers()) {
     if (c.kind === "org") continue;
     for (const item of await vault.items(c.id)) out.push({ container: c, item });
+  }
+  if (withShared) {
+    for (const item of await vault.sharedWithMe().catch(() => [])) {
+      out.push({ container: { id: item.containerId, kind: "client", keyVersion: 0, permission: "read", meta: { name: `Condivisa da ${item.sharedBy}` }, members: 0, items: 0, totpItems: 0, updatedAt: item.updatedAt, grantedBy: "", rotationRequired: false, groups: 0, viaGroups: [] }, item });
+    }
   }
   return out;
 }
@@ -17,7 +22,7 @@ const where = (c: Container) => (c.kind === "personal" ? "Area personale" : c.me
 
 function Row({ container, item, note }: { container: Container; item: Item; note?: string }) {
   return (
-    <a class="item-row" href={`#/c/${container.id}/i/${item.id}`} style="text-decoration:none;color:inherit">
+    <a class="item-row" href={item.sharedBy ? `#/condivisi/i/${item.id}` : `#/c/${container.id}/i/${item.id}`} style="text-decoration:none;color:inherit">
       <span class="grow">
         <span class="ellipsis" style="display:block;font-weight:500">{item.data.name}</span>
         <span class="ellipsis small muted" style="display:block">{where(container)}{item.data.username ? ` · ${item.data.username}` : ""}</span>
@@ -31,7 +36,7 @@ function Row({ container, item, note }: { container: Container; item: Item; note
 let lastQuery = "";
 
 export function Search({ vault }: { vault: Vault }) {
-  const all = useLoad(() => loadAll(vault), []);
+  const all = useLoad(() => loadAll(vault, true), []);
   const [q, setQState] = useState(lastQuery);
   const setQ = (v: string) => { lastQuery = v; setQState(v); };
   const results = useMemo(() => {

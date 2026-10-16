@@ -83,4 +83,33 @@
   }, true);
   window.addEventListener("scroll", () => current && place(), true);
   window.addEventListener("resize", () => current && place());
+
+  // ---------------------------------------------------------------- proposta di salvataggio
+  // All'invio di un modulo di accesso, utente e password vanno al service worker
+  // (solo memoria di sessione, scadenza 5 minuti) per proporre il salvataggio nel popup.
+  let lastSent = "";
+  function capture(scope: ParentNode) {
+    const pwds = Array.from(scope.querySelectorAll<HTMLInputElement>('input[type="password"]')).filter((p) => p.value);
+    const pwd = pwds[0];
+    // Più password compilate (es. cambio password): non indoviniamo quale salvare.
+    if (!pwd || pwds.length > 1) return;
+    const inputs = Array.from(scope.querySelectorAll<HTMLInputElement>("input"));
+    const before = inputs.slice(0, inputs.indexOf(pwd)).reverse();
+    const user = before.find((i) => ["text", "email", "tel", ""].includes(i.type) && i.value.trim());
+    const sig = `${location.hostname}|${user?.value ?? ""}|${pwd.value}`;
+    if (sig === lastSent) return;
+    lastSent = sig;
+    chrome.runtime.sendMessage({ type: "login-captured", username: user?.value.trim() ?? "", password: pwd.value }).catch(() => undefined);
+  }
+  document.addEventListener("submit", (e) => capture(e.target as HTMLFormElement), true);
+  document.addEventListener("click", (e) => {
+    const b = (e.target as Element | null)?.closest?.('button, input[type="submit"], [role="button"]');
+    if (!b) return;
+    const form = b.closest("form");
+    capture(form ?? document);
+  }, true);
+  document.addEventListener("keydown", (e) => {
+    const t = e.target;
+    if (e.key === "Enter" && t instanceof HTMLInputElement && t.type === "password") capture(t.form ?? document);
+  }, true);
 })();

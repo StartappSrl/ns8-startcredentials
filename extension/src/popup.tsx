@@ -1,9 +1,9 @@
 import { render } from "preact";
 import { useEffect, useState } from "preact/hooks";
 import { Container, effectiveTotpUri, generatePassword, Item, normalizeHost, ready, Vault } from "@startcredentials/client";
-import { api, currentVault, getSettings, hasToken, lock } from "./shared";
+import { api, clearPendingSave, currentVault, getPendingSave, getSettings, hasToken, lock, PendingSave } from "./shared";
 import { fillTab } from "./fill";
-import { Brand, CopyButton, ErrorNote, OtpCode, ToastHost, useAction, useToast } from "./ui/kit";
+import { Brand, CopyButton, ErrorNote, OtpCode, ToastHost, useAction, useLoad, useToast } from "./ui/kit";
 import { unlockWith } from "./ui/auth";
 
 const openApp = (hash = "") => chrome.tabs.create({ url: chrome.runtime.getURL(`app.html${hash}`) }).then(() => window.close());
@@ -62,6 +62,7 @@ function Unlocked({ vault }: { vault: Vault }) {
   const [matches, setMatches] = useState<Hit[] | null>(null);
   const [q, setQ] = useState("");
   const [all, setAll] = useState<Hit[] | null>(null);
+  const [pending, setPending] = useState<PendingSave | null>(null);
   const { error, run } = useAction();
   const toast = useToast();
 
@@ -76,7 +77,14 @@ function Unlocked({ vault }: { vault: Vault }) {
         h = null;
       }
       setHost(h);
-      setMatches(h ? await vault.lookup(t!.url!) : []);
+      const found = h ? await vault.lookup(t!.url!) : [];
+      setMatches(found);
+      const p = await getPendingSave();
+      if (p && h && p.host === h) {
+        // Già salvato identico: nessuna proposta.
+        if (found.some((x) => (x.item.data.username ?? "") === p.username && x.item.data.password === p.password)) await clearPendingSave(p.tabId);
+        else setPending(p);
+      }
     });
   }, []);
 
@@ -87,6 +95,9 @@ function Unlocked({ vault }: { vault: Vault }) {
       for (const c of await vault.containers()) {
         if (c.kind === "org") continue;
         for (const item of await vault.items(c.id)) out.push({ container: c, item });
+      }
+      for (const item of await vault.sharedWithMe().catch(() => [])) {
+        out.push({ container: { id: item.containerId, kind: "client", keyVersion: 0, permission: "read", meta: { name: `Condivisa da ${item.sharedBy}` }, members: 0, items: 0, totpItems: 0, updatedAt: item.updatedAt, grantedBy: "", rotationRequired: false, groups: 0, viaGroups: [] }, item });
       }
       setAll(out);
     });
@@ -125,6 +136,7 @@ function Unlocked({ vault }: { vault: Vault }) {
           </div>
         )}
         <ErrorNote error={error} />
+        {pending && !q && <SaveOffer vault={vault} pending={pending} matches={matches ?? []} onDone={(msg) => { setPending(null); if (msg) toast(msg); }} />}
         {list.map((hit) => {
           const d = hit.item.data;
           const isMatch = !q;
@@ -161,4 +173,52 @@ function Unlocked({ vault }: { vault: Vault }) {
 }
 
 chrome.action.setBadgeText({ text: "" }).catch(() => undefined);
+function SaveOffer({ vault, pending, matches, onDone }: { vault: Vault; pending: PendingSave; matches: Hit[]; onDone: (msg?: string) => void }) {
+  // Stesso utente con password diversa su un cliente modificabile: proposta di aggiornamento.
+  const toUpdate = matches.find((m) => (m.item.data.username ?? "") === pending.username && m.container.permission !== "read");
+  const [name, setName] = useState(pending.host.replace(/^www\./, ""));
+  const [target, setTarget] = useState("");
+  const containers = useLoad(() => vault.containers(), []);
+  const writable = (containers.data ?? []).filter((c) => c.kind !== "org" && c.permission !== "read");
+  const { busy, error, run } = useAction();
+  const dismiss = () => { void clearPendingSave(pending.tabId); onDone(); };
+  if (toUpdate) {
+    return (
+      <div class="pop-item match">
+        <div><b>Aggiornare la password?</b><div class="small muted">{toUpdate.item.data.name} · {pending.username || "senza utente"} · {toUpdate.container.kind === "personal" ? "Area personale" : toUpdate.container.meta.name}</div></div>
+        <ErrorNote error={error} />
+        <div class="row" style="gap:6px">
+          <button class="btn primary sm grow" disabled={busy} onClick={() => run(async () => {
+            await vault.updateItem(toUpdate.item, { ...toUpdate.item.data, password: pending.password });
+            await clearPendingSave(pending.tabId);
+            onDone("Password aggiornata");
+          })}>Aggiorna</button>
+          <button class="btn sm" onClick={dismiss}>Non ora</button>
+        </div>
+      </div>
+    );
+  }
+  return (
+    <div class="pop-item match">
+      <div><b>Salvare questo accesso?</b><div class="small muted">{pending.host} · {pending.username || "senza utente"}</div></div>
+      <label class="field">Nome<input class="input" value={name} onInput={(e) => setName(e.currentTarget.value)} /></label>
+      <label class="field">Dove
+        <select class="input" value={target || writable.find((c) => c.kind === "personal")?.id || ""} onChange={(e) => setTarget(e.currentTarget.value)}>
+          {writable.map((c) => <option value={c.id}>{c.kind === "personal" ? "Area personale" : c.meta.name}</option>)}
+        </select>
+      </label>
+      <ErrorNote error={error} />
+      <div class="row" style="gap:6px">
+        <button class="btn primary sm grow" disabled={busy || !writable.length} onClick={() => run(async () => {
+          const cid = target || writable.find((c) => c.kind === "personal")?.id || writable[0]!.id;
+          await vault.createItem(cid, { type: "login", name: name.trim() || pending.host, username: pending.username || undefined, password: pending.password, urls: [`https://${pending.host}`] });
+          await clearPendingSave(pending.tabId);
+          onDone("Accesso salvato");
+        })}>Salva</button>
+        <button class="btn sm" onClick={dismiss}>Non ora</button>
+      </div>
+    </div>
+  );
+}
+
 render(<ToastHost><Popup /></ToastHost>, document.getElementById("root")!);

@@ -64,6 +64,7 @@ export function Setup({ onDone }: { onDone: (p: Pending) => void }) {
         return;
       }
       await saveSettings({ serverUrl: parsed.serverUrl });
+      chrome.runtime.sendMessage({ type: "server-configured" }).catch(() => undefined);
       onDone(parsed.pending);
     });
   };

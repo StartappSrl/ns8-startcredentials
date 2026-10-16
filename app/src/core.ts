@@ -18,6 +18,8 @@ export interface Config {
   port: number;
   maxAttachmentBytes: number;
   sessionHours: number;
+  /** Mesi di conservazione del registro di audit (0 = senza limite). */
+  auditRetentionMonths?: number;
   /** Tentativi di autenticazione al minuto per indirizzo IP. */
   authPerIpPerMinute?: number;
   smtp?: { host: string; port: number; user?: string; pass?: string; encryption: "tls" | "starttls" | "none"; tlsVerify: boolean; from: string };
@@ -41,6 +43,7 @@ export function loadConfig(env = process.env): Config {
     port: Number(env.PORT ?? 8080),
     maxAttachmentBytes: Number(env.MAX_ATTACHMENT_MB ?? 50) * 1024 * 1024,
     sessionHours: Number(env.SESSION_HOURS ?? 12),
+    auditRetentionMonths: Number(env.AUDIT_RETENTION_MONTHS ?? 24),
     authPerIpPerMinute: Number(env.AUTH_RATE_LIMIT ?? 30),
     // Variabili prodotte da discover-smarthost di NethServer 8.
     smtp: env.SMTP_HOST && env.SMTP_ENABLED === "1"
@@ -265,9 +268,28 @@ export async function audit(c: Tx, e: AuditEvent): Promise<void> {
   );
 }
 
-export async function verifyAuditChain(db: Db): Promise<{ ok: boolean; rows: number; brokenAt?: number }> {
+/**
+ * Conservazione del registro: elimina le righe più vecchie di `before`
+ * salvando come ancora l'hash dell'ultima eliminata, così la catena resta
+ * verificabile. La pulizia stessa viene registrata.
+ */
+export async function pruneAudit(db: Db, before: Date): Promise<number> {
+  return tx(db, async (c) => {
+    await c.query("SELECT pg_advisory_xact_lock(7123001)");
+    const last = await c.query("SELECT id, hash FROM audit_log WHERE at < $1 ORDER BY id DESC LIMIT 1", [before.toISOString()]);
+    if (!last.rows[0]) return 0;
+    const d = await c.query("DELETE FROM audit_log WHERE id <= $1", [last.rows[0].id]);
+    await setSetting(c, "audit_anchor", JSON.stringify({ id: Number(last.rows[0].id), hash: last.rows[0].hash, at: new Date().toISOString() }));
+    await audit(c, { action: "audit.pruned", details: { rows: d.rowCount, upToId: Number(last.rows[0].id), before: before.toISOString() } });
+    return d.rowCount ?? 0;
+  });
+}
+
+export async function verifyAuditChain(db: Db): Promise<{ ok: boolean; rows: number; brokenAt?: number; prunedUpTo?: number }> {
   const r = await db.query("SELECT * FROM audit_log ORDER BY id");
-  let prev = "genesis";
+  const anchor = await getSetting(db, "audit_anchor");
+  const a = anchor ? (JSON.parse(anchor) as { id: number; hash: string }) : null;
+  let prev = a?.hash ?? "genesis";
   for (const row of r.rows) {
     const at = new Date(row.at).toISOString();
     const expected = auditHash(prev, at, {
@@ -277,5 +299,5 @@ export async function verifyAuditChain(db: Db): Promise<{ ok: boolean; rows: num
     if (row.prev_hash !== prev || row.hash !== expected) return { ok: false, rows: r.rowCount ?? 0, brokenAt: Number(row.id) };
     prev = row.hash;
   }
-  return { ok: true, rows: r.rowCount ?? 0 };
+  return { ok: true, rows: r.rowCount ?? 0, prunedUpTo: a?.id };
 }

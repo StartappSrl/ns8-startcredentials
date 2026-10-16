@@ -14,6 +14,8 @@ import {
   verifyUserCertification, wipe, wrapPrivateKeys,
   certifyGroup, generateGroupKeys, grantContainerToGroup, grantGroupMembership, GroupContainerGrant, GroupMemberGrant,
   GroupRole, openGroupContainerKey, openGroupMembership, verifyGroupCert,
+  OrgRotation, orgRotationMessage, sign, verifyOrgChain,
+  ItemShare, shareItemKey, openItemShare, ikContext, dataContext,
 } from "@startcredentials/crypto";
 import { Api, ApiError } from "./api.js";
 
@@ -54,6 +56,12 @@ export interface Item {
   id: string; containerId: string; folderId: string | null; type: ItemData["type"]; data: ItemData;
   revision: number; updatedAt: string; updatedBy: string; deletedAt: string | null; attachments: Attachment[];
   ikEnc: string;
+  /** Versione della chiave dell'elemento (cambia a ogni revoca di una condivisione singola). */
+  ikVersion: number;
+  /** Colleghi con cui l'elemento è condiviso singolarmente. */
+  shares: number;
+  /** Solo per gli elementi ricevuti in condivisione: chi li ha condivisi. */
+  sharedBy?: string;
 }
 export interface DirectoryUser {
   id: string; email: string; displayName: string; role: "admin" | "user"; status: "active" | "suspended"; keyVersion: number;
@@ -62,7 +70,7 @@ export interface DirectoryUser {
 export interface Me {
   id: string; email: string; displayName: string; role: "admin" | "user"; keyVersion: number;
   publicKeys: PublicKeys; privateEnc: string; kdfParams: KdfParams; certification: string | null; hasRecovery: boolean;
-  org: { signPublic: string; recoveryPublic: string; containerId?: string } | null;
+  org: { signPublic: string; recoveryPublic: string; containerId?: string; keyVersion?: number; rotations?: OrgRotation[] } | null;
 }
 export type SessionState = "mfa_setup" | "mfa_pending" | "active";
 
@@ -76,6 +84,7 @@ interface RawItem {
   id: string; folderId: string | null; type: ItemData["type"]; ikEnc: string; ikKeyVersion: number; dataEnc: string;
   revision: number; updatedAt: string; updatedBy: string; deletedAt: string | null;
   attachments: { id: string; fkEnc: string; metaEnc: string; header: string; size: number; chunkCount: number }[];
+  ikVersion: number; shares: number;
 }
 
 export interface ExportData {
@@ -87,7 +96,7 @@ export interface ExportData {
     kind: "client" | "personal" | "org";
     meta: ContainerMeta;
     folders: { key: string; name: string; parentKey: string | null }[];
-    items: { folderKey: string | null; data: ItemData }[];
+    items: { folderKey: string | null; data: ItemData; attachments?: { name: string; mime: string; data: string }[] }[];
   }[];
 }
 
@@ -242,6 +251,8 @@ export interface UnlockOptions {
    * ne presenta una diversa lo sblocco fallisce: protegge dalla sostituzione delle chiavi.
    */
   pinnedOrgSignPublic?: string;
+  /** Solo per restore: rilegge i dati dell'utente dal server (predefinito: sì). */
+  refresh?: boolean;
 }
 
 export interface SerializedSession {
@@ -279,7 +290,9 @@ export class Vault {
   }
 
   private static checkOrgPin(me: Me, opts: UnlockOptions) {
-    if (opts.pinnedOrgSignPublic && me.org && me.org.signPublic !== opts.pinnedOrgSignPublic) {
+    // Una chiave diversa è accettata solo se si arriva a lei con rotazioni firmate dalla chiave fissata.
+    if (opts.pinnedOrgSignPublic && me.org && me.org.signPublic !== opts.pinnedOrgSignPublic
+        && !verifyOrgChain(opts.pinnedOrgSignPublic, me.org.signPublic, me.org.rotations ?? [])) {
       throw new SecurityError("La chiave dell'organizzazione presentata dal server è cambiata: possibile attacco");
     }
     if (opts.pinnedOrgSignPublic && !me.org) {
@@ -295,7 +308,10 @@ export class Vault {
   static async restore(api: Api, s: SerializedSession, opts: UnlockOptions = {}): Promise<Vault> {
     await ready();
     Vault.checkOrgPin(s.me, opts);
-    return new Vault(api, s.me, parsePrivateKeys(fromB64(s.keys)));
+    const v = new Vault(api, s.me, parsePrivateKeys(fromB64(s.keys)));
+    // Riprendendo la sessione si rilegge l'organizzazione: una rotazione firmata viene seguita.
+    if (opts.refresh !== false) await v.refreshMe();
+    return v;
   }
 
   lock(): void {
@@ -310,6 +326,8 @@ export class Vault {
     this.orgSignPrivate = undefined;
     for (const k of this.groupKeys.values()) wipe(k);
     this.groupKeys.clear();
+    for (const k of this.sharedIks.values()) wipe(k);
+    this.sharedIks.clear();
   }
 
   get myFingerprint(): string {
@@ -323,7 +341,15 @@ export class Vault {
   async refreshMe(): Promise<Me> {
     const me = await this.api.get<Me>("/me");
     if (this.me.org && me.org?.signPublic !== this.me.org.signPublic) {
-      throw new SecurityError("La chiave dell'organizzazione è cambiata durante la sessione");
+      if (!me.org || !verifyOrgChain(this.me.org.signPublic, me.org.signPublic, me.org.rotations ?? [])) {
+        throw new SecurityError("La chiave dell'organizzazione è cambiata durante la sessione");
+      }
+      // Rotazione legittima: certificazioni da ricontrollare con la nuova chiave.
+      this.dirCache = undefined;
+      wipe(this.orgSignPrivate);
+      this.orgSignPrivate = undefined;
+      for (const k of this.groupKeys.values()) wipe(k);
+      this.groupKeys.clear();
     }
     this.me = me;
     return me;
@@ -531,7 +557,7 @@ export class Vault {
         });
         return {
           id: r.id, containerId, folderId: r.folderId, type: r.type, data, revision: r.revision, updatedAt: r.updatedAt,
-          updatedBy: r.updatedBy, deletedAt: r.deletedAt, attachments, ikEnc: r.ikEnc,
+          updatedBy: r.updatedBy, deletedAt: r.deletedAt, attachments, ikEnc: r.ikEnc, ikVersion: r.ikVersion ?? 1, shares: r.shares ?? 0,
         };
       } finally {
         wipe(ik);
@@ -575,9 +601,10 @@ export class Vault {
   async bulkCreate(
     containerId: string, source: string,
     folders: { key: string; name: string; parentKey: string | null }[],
-    items: { folderKey: string | null; data: ItemData }[],
+    items: { folderKey: string | null; data: ItemData; attachments?: { name: string; mime: string; data: Uint8Array }[] }[],
     onProgress?: (done: number, total: number) => void,
   ): Promise<number> {
+    const withFiles: { itemId: string; attachments: { name: string; mime: string; data: Uint8Array }[] }[] = [];
     const k = await this.key(containerId);
     const ids = new Map(folders.map((f) => [f.key, uuid()]));
     const encFolders = folders.map((f) => {
@@ -589,6 +616,7 @@ export class Vault {
     for (let i = 0; i < Math.max(items.length, 1); i += BATCH) {
       const slice = items.slice(i, i + BATCH).map((it) => {
         const id = uuid();
+        if (it.attachments?.length) withFiles.push({ itemId: id, attachments: it.attachments });
         const e = encryptItem(k.ck, k.version, containerId, id, it.data);
         return {
           id, folderId: it.folderKey ? ids.get(it.folderKey)! : null, type: it.data.type,
@@ -599,7 +627,19 @@ export class Vault {
       done += slice.length;
       onProgress?.(done, items.length);
     }
+    if (withFiles.length) await this.attachToItems(containerId, withFiles);
     return done;
+  }
+
+  /** Carica allegati su elementi appena creati (import). */
+  async attachToItems(containerId: string, list: { itemId: string; attachments: { name: string; mime: string; data: Uint8Array }[] }[]): Promise<void> {
+    if (!list.length) return;
+    const byId = new Map((await this.items(containerId)).map((i) => [i.id, i]));
+    for (const { itemId, attachments } of list) {
+      const item = byId.get(itemId);
+      if (!item) continue;
+      for (const a of attachments) await this.addAttachment(item, a.data, a.name, a.mime);
+    }
   }
 
   async deleteItem(itemId: string): Promise<void> { await this.api.del(`/items/${itemId}`); }
@@ -609,6 +649,15 @@ export class Vault {
     let changed = 0;
     for (let i = 0; i < itemIds.length; i += 1000) {
       changed += (await this.api.post<{ changed: number }>(`/containers/${containerId}/items/bulk`, { action: "delete", ids: itemIds.slice(i, i + 1000) })).changed;
+    }
+    return changed;
+  }
+
+  /** Sposta più elementi in una cartella (null = fuori da ogni cartella). */
+  async moveItems(containerId: string, itemIds: string[], folderId: string | null): Promise<number> {
+    let changed = 0;
+    for (let i = 0; i < itemIds.length; i += 1000) {
+      changed += (await this.api.post<{ changed: number }>(`/containers/${containerId}/items/bulk`, { action: "move", ids: itemIds.slice(i, i + 1000), folderId })).changed;
     }
     return changed;
   }
@@ -661,8 +710,8 @@ export class Vault {
   }
 
   async downloadAttachment(item: Item, att: Attachment): Promise<Uint8Array> {
-    const k = await this.key(item.containerId);
-    const ik = openItemKey(k.ck, item.containerId, item.id, item.ikEnc);
+    const shared = this.sharedIks.get(item.id);
+    const ik = shared ? new Uint8Array(shared) : openItemKey((await this.key(item.containerId)).ck, item.containerId, item.id, item.ikEnc);
     let fk: Uint8Array | undefined;
     try {
       fk = open(ik, att.fkEnc, ctxs.fileKey(item.id, att.id));
@@ -779,6 +828,14 @@ export class Vault {
         failed.push({ name: c.meta.name, error: (e as Error).message });
       }
     }
+    for (const p of await this.api.get<{ itemId: string; containerId: string }[]>("/items/rekey-pending").catch(() => [])) {
+      try {
+        await this.rekeyItem(p.containerId, p.itemId);
+        done.push("elemento condiviso");
+      } catch (e) {
+        failed.push({ name: "elemento condiviso", error: (e as Error).message });
+      }
+    }
     return { done, failed };
   }
 
@@ -830,20 +887,39 @@ export class Vault {
    * che l'utente può leggere, escluso il contenitore dell'organizzazione.
    * Gli allegati non sono inclusi.
    */
-  async exportEncrypted(passphrase: string, kdf?: RegisterParams["kdf"]): Promise<{ file: string; containers: number; items: number; attachmentsSkipped: number }> {
+  async exportEncrypted(
+    passphrase: string, kdf?: RegisterParams["kdf"], opts: { includeAttachments?: boolean; onProgress?: (text: string) => void } = {},
+  ): Promise<{ file: string; containers: number; items: number; attachments: number; attachmentsSkipped: number }> {
+    const LIMIT = 200 * 1024 * 1024;
     const containers: ExportData["containers"] = [];
     let items = 0;
+    let attachments = 0;
     let attachmentsSkipped = 0;
+    let bytes = 0;
     for (const c of await this.containers()) {
       if (c.kind === "org") continue;
       const detail = await this.container(c.id);
       const list = await this.items(c.id);
       items += list.length;
-      attachmentsSkipped += list.reduce((n, i) => n + i.attachments.length, 0);
+      const out: ExportData["containers"][number]["items"] = [];
+      for (const i of list) {
+        const entry: ExportData["containers"][number]["items"][number] = { folderKey: i.folderId, data: i.data };
+        if (i.attachments.length && opts.includeAttachments) {
+          entry.attachments = [];
+          for (const a of i.attachments) {
+            bytes += a.size;
+            if (bytes > LIMIT) throw new Error("Gli allegati superano 200 MB: esporta senza allegati, oppure scaricali a parte");
+            opts.onProgress?.(`Allegato ${a.name}…`);
+            entry.attachments.push({ name: a.name, mime: a.mime, data: toB64(await this.downloadAttachment(i, a)) });
+            attachments++;
+          }
+        } else attachmentsSkipped += i.attachments.length;
+        out.push(entry);
+      }
       containers.push({
         kind: c.kind, meta: c.meta,
         folders: detail.folders.map((f) => ({ key: f.id, name: f.name, parentKey: f.parentId })),
-        items: list.map((i) => ({ folderKey: i.folderId, data: i.data })),
+        items: out,
       });
       this.report("container.export", c.id);
     }
@@ -852,7 +928,7 @@ export class Vault {
     const key = deriveMasterKey(passphrase, kdfParams);
     try {
       const file = JSON.stringify({ format: "startcredentials-export-encrypted", version: 1, kdfParams, data: seal(key, json(payload), "sc:export:v1", "export") }, null, 1);
-      return { file, containers: containers.length, items, attachmentsSkipped };
+      return { file, containers: containers.length, items, attachments, attachmentsSkipped };
     } finally {
       wipe(key);
     }
@@ -996,6 +1072,109 @@ export class Vault {
     await this.rotate(containerId);
   }
 
+  // ---------------------------------------------------------------- condivisione di singoli elementi
+
+  private sharedIks = new Map<string, Uint8Array>();
+
+  async itemShares(itemId: string): Promise<{ userId: string; displayName: string; email: string; since: string }[]> {
+    return this.api.get(`/items/${itemId}/shares`);
+  }
+
+  /** Condivide un elemento (sola lettura) con un collega, anche se non vede il cliente. */
+  async shareItem(item: Item, userId: string): Promise<void> {
+    const rec = (await this.directory(true)).find((u) => u.id === userId);
+    if (!rec?.verified) throw new SecurityError("Il destinatario non ha una chiave certificata");
+    if (rec.status !== "active") throw new SecurityError("Il destinatario è sospeso");
+    const k = await this.key(item.containerId);
+    const ik = openItemKey(k.ck, item.containerId, item.id, item.ikEnc);
+    try {
+      const share = shareItemKey({ itemKey: ik, itemId: item.id, containerId: item.containerId, ikVersion: item.ikVersion, userId, userBoxPublic: rec.publicKeys.box, grantor: this.self });
+      await this.api.post(`/items/${item.id}/shares`, { share });
+    } finally {
+      wipe(ik);
+    }
+  }
+
+  /** Revoca e ricifra subito l'elemento con una chiave nuova. */
+  async unshareItem(item: Item, userId: string): Promise<void> {
+    await this.api.del(`/items/${item.id}/shares/${userId}`);
+    await this.rekeyItem(item.containerId, item.id);
+  }
+
+  /** Nuova chiave per l'elemento: dati, versioni precedenti, allegati e consegne ai destinatari rimasti. */
+  async rekeyItem(containerId: string, itemId: string): Promise<number> {
+    const all = [...(await this.items(containerId)), ...(await this.items(containerId, { trash: true }))];
+    const item = all.find((i) => i.id === itemId);
+    if (!item) throw new SecurityError("Elemento non trovato");
+    const k = await this.key(containerId);
+    const oldIk = openItemKey(k.ck, containerId, itemId, item.ikEnc);
+    const newIk = newSymmetricKey();
+    const ikVersion = item.ikVersion + 1;
+    try {
+      const rawVersions = await this.api.get<{ revision: number; dataEnc: string }[]>(`/items/${itemId}/versions`);
+      const versions = rawVersions.map((v) => ({
+        revision: v.revision,
+        dataEnc: reencryptItemData(newIk, containerId, itemId, unjson<ItemData>(open(oldIk, v.dataEnc, dataContext(containerId, itemId)))),
+      }));
+      const attachments = item.attachments.map((a) => {
+        const fk = open(oldIk, a.fkEnc, ctxs.fileKey(itemId, a.id));
+        try {
+          return {
+            id: a.id,
+            fkEnc: seal(newIk, fk, ctxs.fileKey(itemId, a.id), `ik:${itemId}`),
+            metaEnc: seal(newIk, json({ name: a.name, mime: a.mime }), ctxs.fileMeta(itemId, a.id), `ik:${itemId}`),
+          };
+        } finally {
+          wipe(fk);
+        }
+      });
+      const dir = await this.directory(true);
+      const shares: ItemShare[] = [];
+      for (const r of await this.itemShares(itemId)) {
+        const u = dir.find((x) => x.id === r.userId && x.verified);
+        if (!u) throw new SecurityError(`Chiave non certificata per ${r.displayName}: impossibile ricifrare`);
+        shares.push(shareItemKey({ itemKey: newIk, itemId, containerId, ikVersion, userId: r.userId, userBoxPublic: u.publicKeys.box, grantor: this.self }));
+      }
+      await this.api.post(`/items/${itemId}/rekey`, {
+        ikVersion, revision: item.revision,
+        ikEnc: seal(k.ck, newIk, ikContext(containerId, itemId), `ck:${containerId}:${k.version}`),
+        dataEnc: reencryptItemData(newIk, containerId, itemId, item.data),
+        versions, attachments, shares,
+      });
+      return ikVersion;
+    } finally {
+      wipe(oldIk);
+      wipe(newIk);
+    }
+  }
+
+  /** Elementi condivisi singolarmente con me (sola lettura), con la firma di chi li ha condivisi verificata. */
+  async sharedWithMe(): Promise<Item[]> {
+    const raw = await this.api.get<{
+      id: string; containerId: string; type: ItemData["type"]; dataEnc: string; ikVersion: number; updatedAt: string; sharedBy: string;
+      share: ItemShare; attachments: RawItem["attachments"];
+    }[]>("/shared-items");
+    const out: Item[] = [];
+    for (const r of raw) {
+      try {
+        const ik = openItemShare(r.share, this.self, await this.signerKey(r.share.grantedBy));
+        this.sharedIks.set(r.id, ik);
+        const data = unjson<ItemData>(open(ik, r.dataEnc, dataContext(r.containerId, r.id)));
+        const attachments = r.attachments.map((a) => {
+          const m = unjson<{ name: string; mime: string }>(open(ik, a.metaEnc, ctxs.fileMeta(r.id, a.id)));
+          return { id: a.id, name: m.name, mime: m.mime, size: a.size, chunkCount: a.chunkCount, header: a.header, fkEnc: a.fkEnc };
+        });
+        out.push({
+          id: r.id, containerId: r.containerId, folderId: null, type: r.type, data, revision: 0, updatedAt: r.updatedAt,
+          updatedBy: r.sharedBy, deletedAt: null, attachments, ikEnc: "", ikVersion: r.ikVersion, shares: 0, sharedBy: r.sharedBy,
+        });
+      } catch {
+        /* firma o chiave non valide: l'elemento non viene mostrato */
+      }
+    }
+    return out;
+  }
+
   // ---------------------------------------------------------------- autofill e OTP
 
   /** Elementi che corrispondono esattamente al nome host della pagina. */
@@ -1013,6 +1192,12 @@ export class Vault {
         if (ids.has(item.id) && (item.data.urls ?? []).some((u) => { try { return normalizeHost(u) === host; } catch { return false; } })) {
           out.push({ container, item });
         }
+      }
+    }
+    // Elementi ricevuti singolarmente: confronto del dominio fatto qui, il server non ha gli hash.
+    for (const item of await this.sharedWithMe().catch(() => [] as Item[])) {
+      if ((item.data.urls ?? []).some((u) => { try { return normalizeHost(u) === host; } catch { return false; } })) {
+        out.push({ container: { id: item.containerId, kind: "client", keyVersion: 0, permission: "read", meta: { name: `Condiviso da ${item.sharedBy}` }, members: 0, items: 0, totpItems: 0, updatedAt: item.updatedAt, grantedBy: "", rotationRequired: false, groups: 0, viaGroups: [] }, item });
       }
     }
     return out;
@@ -1056,6 +1241,11 @@ export class Vault {
     await this.api.patch(`/users/${userId}`, change);
   }
 
+  /** Cambiamenti dopo l'evento `since` (0 = solo il punto di partenza). */
+  async changes(since: number): Promise<{ latest: number; containers: string[]; membership: boolean }> {
+    return this.api.get(`/changes?since=${since}`);
+  }
+
   async auditLog(opts: { containerId?: string; before?: number; limit?: number } = {}) {
     const q = new URLSearchParams();
     if (opts.containerId) q.set("containerId", opts.containerId);
@@ -1065,7 +1255,7 @@ export class Vault {
   }
 
   async verifyAudit() {
-    return this.api.get<{ ok: boolean; rows: number; brokenAt?: number }>("/audit/verify");
+    return this.api.get<{ ok: boolean; rows: number; brokenAt?: number; prunedUpTo?: number }>("/audit/verify");
   }
 
   /**
@@ -1105,6 +1295,50 @@ export class Vault {
     const fp = fingerprint({ box: recovery.publicKeys.box, sign: org.publicKeys.sign });
     wipe(org.signPrivate); wipe(org.boxPrivate); wipe(recovery.boxPrivate); wipe(recovery.signPrivate); wipe(ck); wipe(metaKey);
     return { shares: parts.map((p) => `SCR1-${toB64(p)}`), fingerprint: fp };
+  }
+
+  /**
+   * Rotazione della chiave dell'organizzazione, da fare quando esce un
+   * amministratore: nuova chiave di firma e nuova chiave di recupero (con nuove
+   * quote Shamir), utenti e gruppi ricertificati, rotazione firmata con la
+   * chiave attuale. Le vecchie quote di recupero smettono di funzionare.
+   */
+  async rotateOrgKeys(shares = 3, threshold = 2): Promise<{ shares: string[]; fingerprint: string }> {
+    if (this.me.role !== "admin" || !this.me.org?.containerId) throw new SecurityError("Serve un amministratore con accesso alla chiave dell'organizzazione");
+    const oldPrivate = await this.orgKey();
+    const oldPublic = this.me.org.signPublic;
+    const dir = await this.directory(true);
+    // Si ricertifica solo ciò che è verificabile con la chiave attuale: se il server avesse
+    // inserito certificazioni false, il conteggio non torna e la rotazione viene rifiutata.
+    const users = dir.filter((u) => u.certification && u.verified);
+    const groups = (await this.groups()).filter((g) => g.verified);
+    const org = generateUserKeys();
+    const recovery = generateUserKeys();
+    const version = (this.me.org.keyVersion ?? 1) + 1;
+    const rotation = { version, oldSignPublic: oldPublic, newSignPublic: org.publicKeys.sign, newRecoveryPublic: recovery.publicKeys.box };
+    const cid = this.me.org.containerId;
+    const k = await this.key(cid);
+    const [item] = await this.items(cid);
+    if (!item) throw new SecurityError("Chiave dell'organizzazione non trovata");
+    const ik = openItemKey(k.ck, cid, item.id, item.ikEnc);
+    try {
+      const data: ItemData = { ...item.data, fields: [{ label: "org_sign_private", value: toB64(org.signPrivate), secret: true }] };
+      const parts = await split(recovery.boxPrivate, shares, threshold);
+      await this.api.post("/org/rotate", {
+        newSignPublic: org.publicKeys.sign, newRecoveryPublic: recovery.publicKeys.box,
+        recoveryThreshold: threshold, recoveryShares: shares,
+        signature: sign(orgRotationMessage(rotation), oldPrivate),
+        certifications: users.map((u) => ({ userId: u.id, keyVersion: u.keyVersion, certification: certifyUserKeys(u.id, u.keyVersion, u.publicKeys, org.signPrivate) })),
+        groupCertifications: groups.map((g) => ({ groupId: g.id, keyVersion: g.keyVersion, certification: certifyGroup(g.id, g.keyVersion, g.boxPublic, org.signPrivate) })),
+        orgItem: { id: item.id, revision: item.revision, dataEnc: reencryptItemData(ik, cid, item.id, data) },
+      });
+      await this.refreshMe();
+      this.me.hasRecovery = false;
+      await this.ensureRecoveryCopy();
+      return { shares: parts.map((p) => `SCR1-${toB64(p)}`), fingerprint: fingerprint({ box: recovery.publicKeys.box, sign: org.publicKeys.sign }) };
+    } finally {
+      wipe(ik); wipe(org.signPrivate); wipe(org.boxPrivate); wipe(recovery.boxPrivate); wipe(recovery.signPrivate);
+    }
   }
 
   /** Salva la copia di recupero se mancante (utenti registrati prima dell'organizzazione). */

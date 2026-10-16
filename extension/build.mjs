@@ -30,7 +30,7 @@ await build({
 
 // Lo script delle pagine non può essere un modulo: build separata in IIFE.
 await build({
-  entryPoints: { inline: "src/inline.ts" }, outdir: out, bundle: true, format: "iife",
+  entryPoints: { inline: "src/inline.ts", site: "src/site.ts" }, outdir: out, bundle: true, format: "iife",
   target: "chrome127", minify: true, logLevel: "warning",
 });
 

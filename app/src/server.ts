@@ -42,7 +42,7 @@ const here = dirname(fileURLToPath(import.meta.url));
 export const APP_ROOT = join(here, "..", "..");
 export const VERSION = JSON.parse(readFileSync(join(APP_ROOT, "package.json"), "utf8")).version as string;
 
-export async function buildApp(cfg: Config, db: Db): Promise<FastifyInstance> {
+export async function buildApp(cfg: Config, db: Db, opts: { mailer?: Mailer } = {}): Promise<FastifyInstance> {
   await initCrypto();
   await opaque.ready;
 
@@ -67,7 +67,7 @@ export async function buildApp(cfg: Config, db: Db): Promise<FastifyInstance> {
     trustProxy: "127.0.0.1",
   });
 
-  ctx.mailer = createMailer(cfg, (e) => app.log.error({ err: e, smtpHost: cfg.smtp?.host, from: cfg.smtp?.from }, "Invio email non riuscito"));
+  ctx.mailer = opts.mailer ?? createMailer(cfg, (e) => app.log.error({ err: e, smtpHost: cfg.smtp?.host, from: cfg.smtp?.from }, "Invio email non riuscito"));
   if (!cfg.smtp) app.log.warn("Smarthost non configurato: gli inviti vanno inviati a mano");
 
   app.addContentTypeParser("application/octet-stream", { parseAs: "buffer", bodyLimit: 2 * 1024 * 1024 }, (_r, body, done) => done(null, body));
@@ -117,18 +117,18 @@ export async function buildApp(cfg: Config, db: Db): Promise<FastifyInstance> {
   await itemRoutes(app, ctx);
   await groupRoutes(app, ctx);
 
-  const landing = readFileSync(join(APP_ROOT, "public", "index.html"));
-  app.get("/", async (_req, reply) => reply
-    .type("text/html; charset=utf-8")
-    .header("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'; img-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'")
-    .send(landing));
+  // Pagine pubbliche: nessuno script, nessuno stile in linea; risorse con la versione nell'indirizzo.
+  const PAGE_CSP = "default-src 'none'; style-src 'self'; img-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'";
+  const IMMUTABLE = "public, max-age=31536000, immutable";
+  const page = (name: string) => readFileSync(join(APP_ROOT, "public", name), "utf8").replaceAll("__VERSION__", VERSION);
+  const landing = page("index.html");
+  const privacy = page("privacy.html");
+  const siteCss = readFileSync(join(APP_ROOT, "public", "site.css"));
   const logo = readFileSync(join(APP_ROOT, "public", "startapp-logo.png"));
-  app.get("/startapp-logo.png", async (_req, reply) => reply.type("image/png").header("Cache-Control", "public, max-age=86400").send(logo));
-  const privacy = readFileSync(join(APP_ROOT, "public", "privacy.html"));
-  app.get("/privacy", async (_req, reply) => reply
-    .type("text/html; charset=utf-8")
-    .header("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'")
-    .send(privacy));
+  app.get("/", async (_req, reply) => reply.type("text/html; charset=utf-8").header("Content-Security-Policy", PAGE_CSP).send(landing));
+  app.get("/privacy", async (_req, reply) => reply.type("text/html; charset=utf-8").header("Content-Security-Policy", PAGE_CSP).send(privacy));
+  app.get("/site.css", async (_req, reply) => reply.type("text/css; charset=utf-8").header("Cache-Control", IMMUTABLE).send(siteCss));
+  app.get("/startapp-logo.png", async (_req, reply) => reply.type("image/png").header("Cache-Control", IMMUTABLE).send(logo));
   app.get("/download/startcredentials-extension.zip", async (_req, reply) => {
     try {
       const zip = readFileSync(join(APP_ROOT, "public", "startcredentials-extension.zip"));

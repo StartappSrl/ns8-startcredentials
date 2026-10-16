@@ -16,6 +16,8 @@ export interface Settings {
   autoLockMinutes: number;
   clipboardSeconds: number;
   inlineIcon?: boolean;
+  /** Proposta di salvare le password inviate sui siti (richiede l'icona nei campi). */
+  saveOffer?: boolean;
 }
 
 const DEFAULTS: Settings = { autoLockMinutes: 15, clipboardSeconds: 30 };
@@ -68,13 +70,20 @@ export async function currentVault(): Promise<Vault | null> {
   cached = await Vault.restore(new Api({ baseUrl: settings.serverUrl!, token: session.token }), session.vault, {
     pinnedOrgSignPublic: settings.pinnedOrgSignPublic,
   });
+  // Rotazione legittima della chiave dell'organizzazione (catena verificata): aggiorna la chiave fissata.
+  if (cached.me.org && settings.pinnedOrgSignPublic !== cached.me.org.signPublic) {
+    await saveSettings({ pinnedOrgSignPublic: cached.me.org.signPublic });
+    await chrome.storage.session.set({ s: { ...(await getSession()), vault: cached.serialize() } });
+    await cached.ensureRecoveryCopy().catch(() => undefined);
+  }
   return cached;
 }
 
 /** Dopo lo sblocco: fissa la chiave dell'organizzazione (TOFU) e salva la sessione. */
 export async function storeVault(v: Vault): Promise<void> {
   const settings = await getSettings();
-  if (!settings.pinnedOrgSignPublic && v.me.org) await saveSettings({ pinnedOrgSignPublic: v.me.org.signPublic });
+  // Primo accesso (TOFU) o rotazione già verificata nello sblocco: si fissa la chiave attuale.
+  if (v.me.org && settings.pinnedOrgSignPublic !== v.me.org.signPublic) await saveSettings({ pinnedOrgSignPublic: v.me.org.signPublic });
   cached = v;
   await setSession({ vault: v.serialize(), token: v.api.token, lastActivity: Date.now() });
 }
@@ -220,4 +229,18 @@ export async function loadCollapsed(containerId: string): Promise<string[]> {
 export async function saveCollapsed(containerId: string, ids: string[]): Promise<void> {
   const r = await chrome.storage.local.get("collapsed");
   await chrome.storage.local.set({ collapsed: { ...(r.collapsed ?? {}), [containerId]: ids } });
+}
+
+export interface PendingSave { tabId: number; host: string; username: string; password: string; at: number }
+
+/** Accesso in attesa di essere salvato, se ancora valido (5 minuti). */
+export async function getPendingSave(): Promise<PendingSave | null> {
+  const { pendingSave } = await chrome.storage.session.get("pendingSave");
+  if (!pendingSave || Date.now() - pendingSave.at > 5 * 60_000) return null;
+  return pendingSave;
+}
+
+export async function clearPendingSave(tabId?: number): Promise<void> {
+  await chrome.storage.session.remove("pendingSave");
+  if (tabId) await chrome.action.setBadgeText({ text: "", tabId }).catch(() => undefined);
 }

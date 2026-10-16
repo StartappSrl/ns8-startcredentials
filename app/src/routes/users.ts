@@ -1,11 +1,11 @@
 import { FastifyInstance } from "fastify";
 import { randomUUID } from "node:crypto";
 import { z } from "zod";
-import { CryptoError, verifyUserCertification } from "@startcredentials/crypto";
+import { CryptoError, orgRotationMessage, verify, verifyGroupCert, verifyUserCertification } from "@startcredentials/crypto";
 import { audit, badRequest, conflict, forbidden, HttpError, newToken, notFound, tokenHash, tx, verifyAuditChain } from "../core.js";
 import { Ctx, requireAdmin, requireAuth } from "../server.js";
 import { schemas } from "./auth.js";
-import { insertGrant, grantSchema, permissionOf } from "./containers.js";
+import { ACCESSIBLE_CONTAINERS, insertGrant, grantSchema, permissionOf } from "./containers.js";
 import * as opaque from "@serenity-kit/opaque";
 import { newBackupCodes, verifySecondFactor } from "./auth.js";
 
@@ -22,14 +22,21 @@ export async function userRoutes(app: FastifyInstance, ctx: Ctx) {
          FROM users u JOIN user_keys k ON k.user_id = u.id AND k.version = u.key_version
         WHERE u.id = $1`, [a.id]);
     const u = r.rows[0];
-    const org = await db.query("SELECT sign_public, recovery_public, container_id FROM org WHERE id = 1");
+    const org = await db.query("SELECT sign_public, recovery_public, container_id, key_version FROM org WHERE id = 1");
+    const rotations = await db.query("SELECT version, old_sign_public, new_sign_public, new_recovery_public, signature FROM org_rotations ORDER BY version");
     return {
       id: u.id, email: u.email, displayName: u.display_name, role: u.role,
       keyVersion: u.key_version,
       publicKeys: { box: u.box_public, sign: u.sign_public },
       privateEnc: u.private_enc, kdfParams: u.kdf_params,
       certification: u.certification, hasRecovery: u.has_recovery,
-      org: org.rows[0] ? { signPublic: org.rows[0].sign_public, recoveryPublic: org.rows[0].recovery_public, containerId: u.role === "admin" ? org.rows[0].container_id : undefined } : null,
+      org: org.rows[0] ? {
+        signPublic: org.rows[0].sign_public, recoveryPublic: org.rows[0].recovery_public, keyVersion: org.rows[0].key_version,
+        containerId: u.role === "admin" ? org.rows[0].container_id : undefined,
+        rotations: rotations.rows.map((r) => ({
+          version: r.version, oldSignPublic: r.old_sign_public, newSignPublic: r.new_sign_public, newRecoveryPublic: r.new_recovery_public, signature: r.signature,
+        })),
+      } : null,
     };
   });
 
@@ -334,6 +341,80 @@ export async function userRoutes(app: FastifyInstance, ctx: Ctx) {
     });
   });
 
+  /**
+   * Rotazione della chiave dell'organizzazione (es. dopo l'uscita di un
+   * amministratore). Firmata con la chiave attuale; ricertifica in blocco
+   * utenti e gruppi e aggiorna la chiave privata custodita nel contenitore
+   * dell'organizzazione. Le copie di recupero vengono azzerate: ogni client le
+   * rigenera con la nuova chiave di recupero al successivo sblocco.
+   */
+  app.post("/api/v1/org/rotate", async (req) => {
+    const a = requireAdmin(req);
+    const body = z.object({
+      newSignPublic: b64,
+      newRecoveryPublic: b64,
+      recoveryThreshold: z.number().int().min(1).max(10),
+      recoveryShares: z.number().int().min(1).max(10),
+      signature: b64,
+      certifications: z.array(z.object({ userId: z.string().uuid(), keyVersion: z.number().int().min(1), certification: b64 })).max(10_000),
+      groupCertifications: z.array(z.object({ groupId: z.string().uuid(), keyVersion: z.number().int().min(1), certification: b64 })).max(10_000),
+      orgItem: z.object({ id: z.string().uuid(), revision: z.number().int().min(1), dataEnc: envelope }),
+    }).parse(req.body);
+    if (body.recoveryThreshold > body.recoveryShares) throw badRequest("invalid_threshold");
+    return tx(db, async (c) => {
+      await c.query("LOCK TABLE org IN EXCLUSIVE MODE");
+      const o = (await c.query("SELECT * FROM org WHERE id = 1")).rows[0];
+      if (!o) throw conflict("org_not_initialized");
+      const version = o.key_version + 1;
+      const rotation = { version, oldSignPublic: o.sign_public, newSignPublic: body.newSignPublic, newRecoveryPublic: body.newRecoveryPublic };
+      if (!verify(orgRotationMessage(rotation), body.signature, o.sign_public)) throw badRequest("invalid_rotation_signature");
+
+      // Tutti gli utenti oggi certificati vanno ricertificati con la nuova chiave.
+      const certified = await c.query(
+        `SELECT k.user_id, k.version, k.box_public, k.sign_public FROM users u
+           JOIN user_keys k ON k.user_id = u.id AND k.version = u.key_version WHERE k.certification IS NOT NULL`);
+      if (certified.rowCount !== body.certifications.length) throw badRequest("certifications_must_match");
+      for (const cert of body.certifications) {
+        const k = certified.rows.find((r) => r.user_id === cert.userId && r.version === cert.keyVersion);
+        if (!k) throw badRequest("certifications_must_match");
+        try {
+          verifyUserCertification(cert.userId, cert.keyVersion, { box: k.box_public, sign: k.sign_public }, cert.certification, body.newSignPublic);
+        } catch {
+          throw badRequest("invalid_certification");
+        }
+        await c.query("UPDATE user_keys SET certification = $3, certified_by = $4 WHERE user_id = $1 AND version = $2", [cert.userId, cert.keyVersion, cert.certification, a.id]);
+      }
+      const groups = await c.query("SELECT id, key_version, box_public FROM groups WHERE deleted_at IS NULL");
+      if (groups.rowCount !== body.groupCertifications.length) throw badRequest("group_certifications_must_match");
+      for (const gc of body.groupCertifications) {
+        const g = groups.rows.find((r) => r.id === gc.groupId && r.key_version === gc.keyVersion);
+        if (!g) throw badRequest("group_certifications_must_match");
+        try {
+          verifyGroupCert(gc.groupId, gc.keyVersion, g.box_public, gc.certification, body.newSignPublic);
+        } catch {
+          throw badRequest("invalid_group_certification");
+        }
+        await c.query("UPDATE groups SET certification = $2 WHERE id = $1", [gc.groupId, gc.certification]);
+      }
+      // Nuova chiave privata nel contenitore dell'organizzazione, senza conservare la versione precedente.
+      const item = await c.query("SELECT revision FROM items WHERE id = $1 AND container_id = $2 FOR UPDATE", [body.orgItem.id, o.container_id]);
+      if (!item.rows[0]) throw badRequest("org_item_not_found");
+      if (item.rows[0].revision !== body.orgItem.revision) throw conflict("revision_conflict");
+      await c.query("UPDATE items SET data_enc = $2, revision = revision + 1, updated_by = $3, updated_at = now() WHERE id = $1", [body.orgItem.id, body.orgItem.dataEnc, a.id]);
+      await c.query("DELETE FROM item_versions WHERE item_id = $1", [body.orgItem.id]);
+
+      await c.query(
+        "UPDATE org SET sign_public = $1, recovery_public = $2, recovery_threshold = $3, recovery_shares = $4, key_version = $5 WHERE id = 1",
+        [body.newSignPublic, body.newRecoveryPublic, body.recoveryThreshold, body.recoveryShares, version]);
+      await c.query(
+        "INSERT INTO org_rotations (version, old_sign_public, new_sign_public, new_recovery_public, signature, rotated_by) VALUES ($1,$2,$3,$4,$5,$6)",
+        [version, o.sign_public, body.newSignPublic, body.newRecoveryPublic, body.signature, a.id]);
+      await c.query("UPDATE user_keys SET recovery_enc = NULL");
+      await audit(c, { actorId: a.id, action: "org.key_rotated", ip: req.ip, details: { keyVersion: version, users: body.certifications.length, groups: body.groupCertifications.length } });
+      return { ok: true, keyVersion: version };
+    });
+  });
+
   // ------------------------------------------------------------ audit
 
   app.get("/api/v1/audit", async (req) => {
@@ -359,6 +440,29 @@ export async function userRoutes(app: FastifyInstance, ctx: Ctx) {
     }));
   });
 
+  /**
+   * Cambiamenti dopo l'evento `since`, limitati ai contenitori visibili all'utente
+   * (o in cui ha appena ricevuto o perso l'accesso). Il client lo interroga
+   * periodicamente per aggiornare le viste senza ricaricare.
+   */
+  app.get("/api/v1/changes", async (req) => {
+    const a = requireAuth(req);
+    const { since } = z.object({ since: z.coerce.number().int().min(0).default(0) }).parse(req.query);
+    const latest = Number((await db.query("SELECT coalesce(max(id), 0) AS id FROM audit_log")).rows[0].id);
+    if (!since) return { latest, containers: [], membership: false };
+    const r = await db.query(
+      `SELECT DISTINCT l.container_id FROM audit_log l
+        WHERE l.id > $2 AND l.container_id IS NOT NULL
+          AND (l.container_id IN (${ACCESSIBLE_CONTAINERS}) OR (l.target_type = 'user' AND l.target_id = $1::text))
+        LIMIT 500`, [a.id, since]);
+    // Accessi ricevuti o tolti (anche tramite gruppo): serve ricaricare l'elenco dei clienti.
+    const m = await db.query(
+      `SELECT 1 FROM audit_log WHERE id > $2 AND (
+         (target_type = 'user' AND target_id = $1::text) OR action IN ('container.group_set', 'container.group_removed', 'group.key_rotated', 'group.deleted', 'org.key_rotated')
+       ) LIMIT 1`, [a.id, since]);
+    return { latest, containers: r.rows.map((x) => x.container_id as string), membership: !!m.rowCount };
+  });
+
   app.get("/api/v1/audit/verify", async (req) => {
     requireAdmin(req);
     return verifyAuditChain(db);
@@ -369,7 +473,10 @@ export async function userRoutes(app: FastifyInstance, ctx: Ctx) {
     const a = requireAuth(req);
     const body = z.object({ action: z.enum(["item.reveal", "item.copy", "item.fill", "item.totp_copy", "container.export"]), itemId: z.string().uuid().optional(), containerId: z.string().uuid() }).parse(req.body);
     const p = await permissionOf(db, body.containerId, a.id);
-    if (!p) throw forbidden();
+    const viaShare = !p && body.itemId
+      ? (await db.query("SELECT 1 FROM item_shares sh JOIN items i ON i.id = sh.item_id AND sh.ik_version = i.ik_version WHERE sh.item_id = $1 AND sh.user_id = $2 AND i.container_id = $3", [body.itemId, a.id, body.containerId])).rowCount
+      : 0;
+    if (!p && !viaShare) throw forbidden();
     if (body.itemId) {
       const it = await db.query("SELECT 1 FROM items WHERE id = $1 AND container_id = $2", [body.itemId, body.containerId]);
       if (!it.rowCount) throw notFound();

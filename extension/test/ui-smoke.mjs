@@ -281,6 +281,25 @@ try {
   await click("Chiudi");
   step("revoca con rotazione della chiave dal dialogo");
 
+  // Laura non vede più il cliente: le si condivide una sola password.
+  await waitFor(() => w.document.querySelector("[data-item]"), "elementi del cliente");
+  await click("Espandi tutto").catch(() => undefined);
+  const msRow = await waitFor(() => [...w.document.querySelectorAll("[data-item]")].find((r) => r.textContent.includes("Microsoft 365")), "riga Microsoft 365");
+  msRow.dispatchEvent(new w.MouseEvent("click", { bubbles: true }));
+  await waitFor(() => [...w.document.querySelectorAll("button")].some((b) => b.textContent.startsWith("Condividi solo questa password")), "pulsante di condivisione singola");
+  [...w.document.querySelectorAll("button")].find((b) => b.textContent.startsWith("Condividi solo questa password")).dispatchEvent(new w.MouseEvent("click", { bubbles: true }));
+  await waitFor(() => [...(byLabel("Collega")?.options ?? [])].some((o) => o.value === reg.userId), "Laura tra i colleghi");
+  type("Collega", reg.userId);
+  await click("Condividi");
+  await waitAsync(async () => (await laura.sharedWithMe()).some((i) => i.data.name === "Microsoft 365 – amministratore"), "password ricevuta da Laura");
+  assert.ok(!(await laura.containers()).some((c) => c.meta.name === "Studio Legale Moretti"), "Laura non vede il cliente");
+  await waitFor(() => [...w.document.querySelectorAll(".dialog button")].some((b) => b.textContent === "Rimuovi"), "Laura nell'elenco");
+  await click("Rimuovi");
+  [...w.document.querySelectorAll(".dialog button")].filter((b) => b.textContent === "Rimuovi").pop().dispatchEvent(new w.MouseEvent("click", { bubbles: true }));
+  await waitAsync(async () => !(await laura.sharedWithMe()).some((i) => i.data.name === "Microsoft 365 – amministratore"), "condivisione rimossa");
+  await click("Chiudi");
+  step("condivisione di una sola password e revoca con ricifratura");
+
   // Gruppi: creazione, membro, condivisione del cliente con il gruppo.
   await nav("#/clienti");
   await nav("#/admin/gruppi");
@@ -415,7 +434,16 @@ try {
   await waitFor(() => w.document.querySelectorAll("[data-item]").length === 0, "cestino vuoto");
   [...w.document.querySelectorAll('[role="tab"]')].find((t) => t.textContent === "Tutto").dispatchEvent(new w.MouseEvent("click", { bubbles: true }));
   await waitFor(() => w.document.querySelectorAll("[data-item]").length === before, "elementi ripristinati");
-  step("selezione multipla: cartella intera e singola password nel cestino, poi ripristino");
+  // Sposta in cartella: Microsoft 365 fuori da ogni cartella.
+  await click("Seleziona");
+  w.document.querySelector('[aria-label="Seleziona Microsoft 365 – amministratore"]').dispatchEvent(new w.MouseEvent("click", { bubbles: true }));
+  await waitFor(() => w.document.querySelector(".bulk-bar b")?.textContent === "1", "1 elemento selezionato");
+  await click("Sposta in cartella");
+  await waitText("Spostare 1 elemento");
+  type("Nella cartella", "");
+  await click("Sposta");
+  await waitFor(() => w.document.querySelector('[data-item]')?.textContent.includes("Microsoft 365") && w.document.querySelector('[data-item]').style.paddingLeft === "18px", "elemento fuori dalle cartelle");
+  step("selezione multipla: cestino, ripristino e sposta in cartella");
 
   await nav("#/admin/audit");
   await waitText("Registro attività");

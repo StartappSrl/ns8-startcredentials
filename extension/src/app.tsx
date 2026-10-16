@@ -4,7 +4,7 @@ import { ApiError, Container, ready, Vault } from "@startcredentials/client";
 import { api, currentVault, getSettings, hasToken, saveToken } from "./shared";
 import { AuthFrame, Login, MfaSetup, MfaVerify, parseLink, Pending, Recover, Register, Setup, Unlock, unlockWith } from "./ui/auth";
 import { ErrorNote, ToastHost, useLoad } from "./ui/kit";
-import { Clients, ContainerView, go, Shell, useRoute } from "./ui/vault";
+import { Clients, ContainerView, go, SharedItems, Shell, useRoute } from "./ui/vault";
 import { Audit, Generator, Import, Org, SettingsPage, Users } from "./ui/admin";
 import { Health, Search } from "./ui/tools";
 import { Groups } from "./ui/groups";
@@ -98,6 +98,33 @@ function Main({ vault }: { vault: Vault }) {
     if (containers.data && !personal) vault.ensurePersonal().then(containers.reload).catch(() => undefined);
   }, [containers.data]);
 
+  // Aggiornamenti dai colleghi: controllo leggero ogni 20 secondi, solo con la finestra visibile.
+  useEffect(() => {
+    let since = 0;
+    let busy = false;
+    const tick = async () => {
+      if (busy || document.visibilityState !== "visible") return;
+      busy = true;
+      try {
+        const r = await vault.changes(since);
+        if (since && (r.containers.length || r.membership)) {
+          containers.reload();
+          window.dispatchEvent(new CustomEvent("sc-changes", { detail: r.containers }));
+        }
+        since = r.latest;
+      } catch {
+        /* rete assente o sessione scaduta: si riprova al giro successivo */
+      } finally {
+        busy = false;
+      }
+    };
+    void tick();
+    const t = setInterval(tick, 20_000);
+    const onVisible = () => { if (document.visibilityState === "visible") void tick(); };
+    document.addEventListener("visibilitychange", onVisible);
+    return () => { clearInterval(t); document.removeEventListener("visibilitychange", onVisible); };
+  }, []);
+
   // Rotazioni rimaste in sospeso (revoche interrotte, colleghi usciti): le completa il primo gestore.
   const [rotated, setRotated] = useState<string | null>(null);
   useEffect(() => {
@@ -117,7 +144,14 @@ function Main({ vault }: { vault: Vault }) {
   else if (!containers.data) page = <p class="muted">Decifratura dei clienti…</p>;
   else if (m) page = <ContainerView vault={vault} id={m[1]!} focusItem={m[2]} onChanged={containers.reload} />;
   else if (route === "/personale") page = personal ? <ContainerView vault={vault} id={personal.id} onChanged={containers.reload} /> : <p class="muted">Preparazione…</p>;
-  else if (route === "/condivisi") page = <Clients vault={vault} containers={list} reload={containers.reload} shared />;
+  else if (route === "/condivisi" || route.startsWith("/condivisi/i/")) {
+    page = (
+      <>
+        <Clients vault={vault} containers={list} reload={containers.reload} shared />
+        <SharedItems vault={vault} focus={route.match(/^\/condivisi\/i\/([0-9a-f-]{36})$/)?.[1]} />
+      </>
+    );
+  }
   else if (route === "/generatore") page = <Generator />;
   else if (route === "/cerca") page = <Search vault={vault} />;
   else if (route === "/salute") page = <Health vault={vault} />;

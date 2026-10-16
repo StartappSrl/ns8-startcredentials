@@ -3,7 +3,7 @@ import {
   ApiError, ClientImportSummary, Container, effectiveTotpUri, generatePassword, import1Password, importAsClients, importBitwarden, importCsv, importInto,
   importKeePass, ImportResult, importStartCredentials, planClientImport, Vault,
 } from "@startcredentials/client";
-import { disableInlineIcon, download, enableInlineIcon, getSettings, initials, lock, saveSettings, signOut } from "../shared";
+import { disableInlineIcon, download, enableInlineIcon, getSettings, initials, lock, saveSettings, signOut, storeVault } from "../shared";
 import { BackupCodes } from "./auth";
 import { CopyButton, Dialog, ErrorNote, Meter, useAction, useLoad, useToast } from "./kit";
 import { go } from "./vault";
@@ -301,6 +301,30 @@ export function Org({ vault, onChanged }: { vault: Vault; onChanged: () => void 
           <button class="btn primary" style="align-self:flex-start" disabled={busy} onClick={() => run(async () => setResult(await vault.initOrg(shares, threshold)))}>Inizializza l'organizzazione</button>
         </div>
       )}
+      {info.data?.initialized && (
+        <div class="card pad stack" style="max-width:760px">
+          <h3>Ruota la chiave dell'organizzazione</h3>
+          <p>Da fare quando esce un amministratore, o se temi che la chiave o le quote di recupero siano state esposte. Vengono generate una nuova chiave di firma e una nuova chiave di recupero con nuove quote; utenti e gruppi vengono ricertificati in automatico. Le quote attuali smettono di funzionare.</p>
+          <p class="small muted">La rotazione è firmata con la chiave attuale: le estensioni dei colleghi la verificano e la accettano da sole al prossimo accesso.</p>
+          <div class="row">
+            <label class="field">Numero di quote
+              <select class="input" value={shares} onChange={(e) => { const n = Number(e.currentTarget.value); setShares(n); setThreshold(Math.min(threshold, n)); }}>
+                {[2, 3, 4, 5].map((n) => <option value={n}>{n}</option>)}
+              </select>
+            </label>
+            <label class="field">Quote necessarie per un recupero
+              <select class="input" value={threshold} onChange={(e) => setThreshold(Number(e.currentTarget.value))}>
+                {[2, 3, 4, 5].filter((n) => n <= shares).map((n) => <option value={n}>{n}</option>)}
+              </select>
+            </label>
+          </div>
+          <button class="btn danger" style="align-self:flex-start" disabled={busy} onClick={() => run(async () => {
+            const r = await vault.rotateOrgKeys(shares, threshold);
+            await storeVault(vault);
+            setResult(r);
+          })}>{busy ? "Rotazione in corso…" : "Ruota la chiave dell'organizzazione"}</button>
+        </div>
+      )}
     </>
   );
 }
@@ -317,12 +341,15 @@ const ACTION_LABEL: Record<string, string> = {
   "item.created": "Elemento creato", "item.updated": "Elemento modificato", "item.deleted": "Elemento nel cestino", "item.restored": "Elemento ripristinato",
   "item.reveal": "Password mostrata", "item.copy": "Password copiata", "item.fill": "Compilazione automatica", "item.totp_copy": "OTP copiato",
   "attachment.added": "Allegato aggiunto", "attachment.deleted": "Allegato eliminato",
+  "audit.pruned": "Pulizia del registro", "item.moved": "Elemento spostato", "org.key_rotated": "Chiave dell'organizzazione ruotata",
+  "group.created": "Gruppo creato", "group.member_set": "Membro del gruppo", "group.member_removed": "Uscita dal gruppo", "group.key_rotated": "Chiave del gruppo ruotata",
+  "user.offboarded": "Uscita dall'azienda", "user.mfa_reset": "MFA reimpostata", "user.password_changed": "Master password cambiata",
 };
 
 export function Audit({ vault, containers }: { vault: Vault; containers: Container[] }) {
   const [containerId, setContainerId] = useState("");
   const [rows, setRows] = useState<Awaited<ReturnType<Vault["auditLog"]>>>([]);
-  const [verify, setVerify] = useState<{ ok: boolean; rows: number; brokenAt?: number } | null>(null);
+  const [verify, setVerify] = useState<{ ok: boolean; rows: number; brokenAt?: number; prunedUpTo?: number } | null>(null);
   const load = useLoad(async () => {
     const r = await vault.auditLog({ containerId: containerId || undefined });
     setRows(r);
@@ -340,7 +367,7 @@ export function Audit({ vault, containers }: { vault: Vault; containers: Contain
         <button class="btn" disabled={busy} onClick={() => run(async () => setVerify(await vault.verifyAudit()))}>Verifica integrità</button>
       </div>
       {verify && (verify.ok
-        ? <div class="notice ok">Catena integra: {verify.rows} eventi verificati.</div>
+        ? <div class="notice ok">Catena integra: {verify.rows} eventi verificati.{verify.prunedUpTo ? " Gli eventi più vecchi del periodo di conservazione sono stati eliminati: la verifica parte dall'ultimo eliminato." : ""}</div>
         : <div class="notice error">Catena interrotta all'evento {verify.brokenAt}: il registro è stato alterato.</div>)}
       <ErrorNote error={load.error ?? error} />
       <label class="field" style="max-width:340px">Cliente
@@ -391,6 +418,8 @@ export function Import({ vault, containers, onChanged }: { vault: Vault; contain
   const writable = containers.filter((c) => c.permission !== "read" && c.kind !== "org");
   const personal = containers.find((c) => c.kind === "personal");
   const [mode, setMode] = useState<"clients" | "single">("clients");
+  const [level, setLevel] = useState<1 | 2>(1);
+  const isAdmin = vault.me.role === "admin";
   const [target, setTarget] = useState(writable[0]?.id ?? "");
   const [looseTarget, setLooseTarget] = useState(personal?.id ?? "");
   const [source, setSource] = useState<(typeof SOURCES)[number]["id"]>("passbolt");
@@ -402,8 +431,9 @@ export function Import({ vault, containers, onChanged }: { vault: Vault; contain
   const [done, setDone] = useState<{ single?: number; clients?: ClientImportSummary } | null>(null);
   const { busy, error, run } = useAction();
   const isKdbx = file?.name.toLowerCase().endsWith(".kdbx");
-  const plan = preview ? planClientImport(preview, containers) : null;
-  const topFolders = preview?.folders.filter((f) => !f.parentKey).length ?? 0;
+  const plan = preview ? planClientImport(preview, containers, { level, canCreate: isAdmin }) : null;
+  const topFolders = plan?.clients.length ?? 0;
+  const singleWrapper = (preview?.folders.filter((f) => !f.parentKey).length ?? 0) === 1;
 
   const analyse = () => run(async () => {
     if (!file) throw new Error("Scegli un file");
@@ -417,6 +447,9 @@ export function Import({ vault, containers, onChanged }: { vault: Vault; contain
     if (source !== "startcredentials") r.source = source;
     // Senza cartelle principali la modalità per cliente non ha senso.
     if (!r.folders.some((f) => !f.parentKey)) setMode("single");
+    // Tutto racchiuso in un'unica cartella esterna (es. "Passbolt"): i clienti sono al secondo livello.
+    const tops = r.folders.filter((f) => !f.parentKey);
+    setLevel(tops.length === 1 && r.folders.some((f) => f.parentKey === tops[0]!.key) ? 2 : 1);
     setPreview(r);
   });
 
@@ -486,6 +519,17 @@ export function Import({ vault, containers, onChanged }: { vault: Vault; contain
             </select>
           </label>
         )}
+        {mode === "clients" && preview && (
+          <label class="field">Dove sono i clienti nel file
+            <select class="input" value={String(level)} onChange={(e) => setLevel(Number(e.currentTarget.value) as 1 | 2)}>
+              <option value="1">Cartelle principali</option>
+              <option value="2">Sottocartelle (la cartella principale fa solo da contenitore e viene ignorata)</option>
+            </select>
+          </label>
+        )}
+        {mode === "clients" && preview && level === 1 && singleWrapper && (
+          <div class="notice warn">Il file ha una sola cartella principale: se racchiude tutti i clienti, scegli «Sottocartelle».</div>
+        )}
         {mode === "clients" && (
           <label class="field">Credenziali fuori da ogni cartella
             <select class="input" value={looseTarget} onChange={(e) => setLooseTarget(e.currentTarget.value)}>
@@ -513,7 +557,9 @@ export function Import({ vault, containers, onChanged }: { vault: Vault; contain
                       <td>{c.name}</td>
                       <td class="mono">{c.items.length}</td>
                       <td class="mono">{c.folders.length}</td>
-                      <td>{c.readOnly ? <span class="badge warn">Esiste, sola lettura: saltato</span> : c.existing ? <span class="badge">Esistente</span> : <span class="badge accent">Nuovo</span>}</td>
+                      <td>{c.readOnly ? <span class="badge warn">Esiste, sola lettura: saltato</span>
+                        : c.cannotCreate ? <span class="badge warn">Non esiste: lo crea solo un amministratore</span>
+                        : c.existing ? <span class="badge">Esistente</span> : <span class="badge accent">Nuovo</span>}</td>
                     </tr>
                   ))}
                   {plan.loose.length > 0 && (
@@ -537,11 +583,11 @@ export function Import({ vault, containers, onChanged }: { vault: Vault; contain
           )}
           {preview && mode === "clients" && topFolders > 0 && plan && (
             <button class="btn primary" disabled={busy} onClick={() => run(async () => {
-              const r = await importAsClients(vault, preview, { looseContainerId: looseTarget || null, onProgress: setProgress });
+              const r = await importAsClients(vault, preview, { looseContainerId: looseTarget || null, onProgress: setProgress, level });
               setProgress(null);
               onChanged();
               setDone({ clients: r });
-            })}>{busy ? (progress ?? "Cifratura…") : `Importa in ${plan.clients.filter((c) => !c.readOnly).length} clienti`}</button>
+            })}>{busy ? (progress ?? "Cifratura…") : `Importa in ${plan.clients.filter((c) => !c.readOnly && !c.cannotCreate).length} clienti`}</button>
           )}
         </div>
       </div>
@@ -628,6 +674,15 @@ export function SettingsPage({ vault }: { vault: Vault }) {
           Mostra l'icona StartCredentials nei campi di accesso dei siti
         </label>
         <p class="small muted">Richiede il permesso di accedere alle pagine HTTPS. L'icona apre solo il popup: la compilazione resta sempre manuale e su corrispondenza esatta del dominio. In alternativa usa la scorciatoia Ctrl+Maiusc+L.</p>
+        {s.data.inlineIcon && (
+          <>
+            <label class="check">
+              <input type="checkbox" checked={s.data.saveOffer !== false} onChange={async (e) => { await saveSettings({ saveOffer: e.currentTarget.checked }); s.reload(); toast("Salvato"); }} />
+              Proponi di salvare le password usate per accedere ai siti
+            </label>
+            <p class="small muted">Dopo un accesso, utente e password restano solo nella memoria del browser per 5 minuti, finché non scegli nel popup se salvarli.</p>
+          </>
+        )}
         <p class="small muted">Server: <span class="mono">{s.data.serverUrl}</span></p>
         <div class="row">
           <button class="btn" onClick={async () => { await lock(); location.reload(); }}>Blocca ora</button>
@@ -659,7 +714,7 @@ function AccountSecurity({ vault }: { vault: Vault }) {
       </div>
       {mfa.data && mfa.data.backupCodesRemaining < 3 && <div class="notice warn">Ti restano pochi codici di riserva: generane di nuovi.</div>}
       <div class="row between">
-        <div><div style="font-weight:500">Export cifrato</div><div class="small muted">Copia di tutto ciò che puoi leggere, protetta da una passphrase. Gli allegati non sono inclusi.</div></div>
+        <div><div style="font-weight:500">Export cifrato</div><div class="small muted">Copia di tutto ciò che puoi leggere, allegati compresi, protetta da una passphrase.</div></div>
         <button class="btn" onClick={() => setDialog("export")}>Esporta</button>
       </div>
       {dialog === "password" && <ChangePasswordDialog vault={vault} onClose={() => { setDialog(null); mfa.reload(); }} />}
@@ -737,13 +792,15 @@ function BackupCodesDialog({ vault, onClose }: { vault: Vault; onClose: () => vo
 function ExportDialog({ vault, onClose }: { vault: Vault; onClose: () => void }) {
   const [pw, setPw] = useState("");
   const [pw2, setPw2] = useState("");
-  const [done, setDone] = useState<{ containers: number; items: number; attachmentsSkipped: number } | null>(null);
+  const [done, setDone] = useState<{ containers: number; items: number; attachments: number; attachmentsSkipped: number } | null>(null);
+  const [withFiles, setWithFiles] = useState(true);
+  const [progress, setProgress] = useState<string | null>(null);
   const { busy, error, setError, run } = useAction();
   return (
     <Dialog title="Export cifrato" onClose={onClose}>
       {done ? (
         <div class="stack">
-          <div class="notice ok">Esportati {done.items} elementi da {done.containers} contenitori.{done.attachmentsSkipped ? ` ${done.attachmentsSkipped} allegati non sono inclusi.` : ""}</div>
+          <div class="notice ok">Esportati {done.items} elementi da {done.containers} contenitori{done.attachments ? `, con ${done.attachments} allegati` : ""}.{done.attachmentsSkipped ? ` ${done.attachmentsSkipped} allegati non sono inclusi.` : ""}</div>
           <p class="small muted">Si reimporta dalla pagina Importa, scegliendo «Export cifrato di StartCredentials». Senza la passphrase il file è illeggibile.</p>
           <div class="row" style="justify-content:flex-end"><button class="btn primary" onClick={onClose}>Fatto</button></div>
         </div>
@@ -753,7 +810,8 @@ function ExportDialog({ vault, onClose }: { vault: Vault; onClose: () => void })
           if ([...pw].length < 12) return setError("La passphrase deve avere almeno 12 caratteri.");
           if (pw !== pw2) return setError("Le due passphrase non coincidono.");
           run(async () => {
-            const r = await vault.exportEncrypted(pw);
+            const r = await vault.exportEncrypted(pw, undefined, { includeAttachments: withFiles, onProgress: setProgress });
+            setProgress(null);
             download(new TextEncoder().encode(r.file), `startcredentials-export-${new Date().toISOString().slice(0, 10)}.json`, "application/json");
             setDone(r);
           });
@@ -762,10 +820,11 @@ function ExportDialog({ vault, onClose }: { vault: Vault; onClose: () => void })
           <label class="field">Passphrase dell'export<input class="input" type="password" autoComplete="new-password" required autoFocus value={pw} onInput={(e) => setPw(e.currentTarget.value)} /></label>
           <Meter value={pw} />
           <label class="field">Ripeti la passphrase<input class="input" type="password" autoComplete="new-password" required value={pw2} onInput={(e) => setPw2(e.currentTarget.value)} /></label>
+          <label class="check"><input type="checkbox" checked={withFiles} onChange={(e) => setWithFiles(e.currentTarget.checked)} />Includi gli allegati (fino a 200 MB in totale)</label>
           <ErrorNote error={error} />
           <div class="row" style="justify-content:flex-end">
             <button type="button" class="btn" onClick={onClose}>Annulla</button>
-            <button class="btn primary" disabled={busy}>{busy ? "Cifratura…" : "Esporta"}</button>
+            <button class="btn primary" disabled={busy}>{busy ? (progress ?? "Cifratura…") : "Esporta"}</button>
           </div>
         </form>
       )}

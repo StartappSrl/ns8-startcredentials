@@ -40,3 +40,17 @@ assert.ok(!JSON.stringify(sent).includes("segreto"));
 w.eval(readFileSync("dist/inline.js", "utf8"));
 assert.equal(w.document.querySelectorAll("body ~ div, html > div").length, 1);
 console.log("✓ icona nei campi: solo moduli di accesso, apre il popup, non trasmette dati");
+
+// Invio del modulo di accesso: utente e password vanno solo al service worker dell'estensione.
+w.document.getElementById("u").value = "mario";
+w.document.getElementById("p").value = "Password-Nuova-1";
+w.document.getElementById("login").dispatchEvent(new w.Event("submit", { bubbles: true, cancelable: true }));
+const cap = JSON.parse(JSON.stringify(sent)).filter((m) => m.type === "login-captured");
+assert.equal(cap.length, 1);
+assert.equal(cap[0].username, "mario");
+assert.equal(cap[0].password, "Password-Nuova-1");
+// Lo stesso invio ripetuto non genera doppioni; senza password non parte nulla.
+w.document.getElementById("login").dispatchEvent(new w.Event("submit", { bubbles: true, cancelable: true }));
+w.document.getElementById("news").dispatchEvent(new w.Event("submit", { bubbles: true, cancelable: true }));
+assert.equal(JSON.parse(JSON.stringify(sent)).filter((m) => m.type === "login-captured").length, 1);
+console.log("✓ invio del modulo: accesso inviato una sola volta al service worker, niente dai moduli senza password");

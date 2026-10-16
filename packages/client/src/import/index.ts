@@ -6,11 +6,12 @@ import { unzipSync } from "fflate";
 import type { ItemData } from "@startcredentials/crypto";
 import type { Container, Vault } from "../vault.js";
 import { KEEPASS_TOTP_FIELDS, keepassTotpUri } from "../totp-fields.js";
+import { fromB64 } from "@startcredentials/crypto";
 
 export type ImportSource = "csv" | "bitwarden" | "1password" | "keepass";
 
 export interface ImportedFolder { key: string; name: string; parentKey: string | null }
-export interface ImportedItem { folderKey: string | null; data: ItemData }
+export interface ImportedItem { folderKey: string | null; data: ItemData; attachments?: { name: string; mime: string; data: Uint8Array }[] }
 export interface ImportResult { source: string; folders: ImportedFolder[]; items: ImportedItem[]; skipped: { name: string; reason: string }[] }
 
 // ------------------------------------------------------------------ CSV (RFC 4180)
@@ -320,7 +321,12 @@ export async function importStartCredentials(file: string, passphrase: string): 
     for (const f of [...c.folders].sort((a, b) => depth(a.key) - depth(b.key))) {
       res.folders.push({ key: `${rootKey}:${f.key}`, name: f.name, parentKey: f.parentKey ? `${rootKey}:${f.parentKey}` : rootKey });
     }
-    for (const it of c.items) res.items.push({ folderKey: it.folderKey ? `${rootKey}:${it.folderKey}` : rootKey, data: it.data });
+    for (const it of c.items) {
+      res.items.push({
+        folderKey: it.folderKey ? `${rootKey}:${it.folderKey}` : rootKey, data: it.data,
+        attachments: it.attachments?.map((a) => ({ name: a.name, mime: a.mime, data: fromB64(a.data) })),
+      });
+    }
   });
   return res;
 }
@@ -340,6 +346,8 @@ export interface ClientImportPlan {
     existing: Container | null;
     /** true se esiste un cliente omonimo su cui non hai il permesso di scrittura. */
     readOnly: boolean;
+    /** true se il cliente non esiste e chi importa non può crearlo (solo gli amministratori). */
+    cannotCreate: boolean;
     folders: ImportedFolder[];
     items: ImportedItem[];
   }[];
@@ -354,7 +362,23 @@ const norm = (s: string) => s.trim().toLocaleLowerCase("it");
  * di primo livello diventa (o ritrova) un cliente, le sottocartelle restano
  * cartelle al suo interno.
  */
-export function planClientImport(r: ImportResult, containers: Container[]): ClientImportPlan {
+/**
+ * Sale di un livello: le cartelle principali spariscono e le loro figlie
+ * diventano principali (per export racchiusi in un'unica cartella esterna).
+ * Gli elementi che stavano direttamente nelle cartelle principali restano senza cartella.
+ */
+export function dropTopLevel(r: ImportResult): ImportResult {
+  const tops = new Set(r.folders.filter((f) => !f.parentKey).map((f) => f.key));
+  return {
+    ...r,
+    folders: r.folders.filter((f) => !tops.has(f.key)).map((f) => (f.parentKey && tops.has(f.parentKey) ? { ...f, parentKey: null } : f)),
+    items: r.items.map((i) => (i.folderKey && tops.has(i.folderKey) ? { ...i, folderKey: null } : i)),
+  };
+}
+
+export function planClientImport(input: ImportResult, containers: Container[], opts: { level?: 1 | 2; canCreate?: boolean } = {}): ClientImportPlan {
+  const r = opts.level === 2 ? dropTopLevel(input) : input;
+  const canCreate = opts.canCreate ?? true;
   const byKey = new Map(r.folders.map((f) => [f.key, f]));
   const topOf = (key: string): ImportedFolder => {
     let f = byKey.get(key)!;
@@ -379,7 +403,8 @@ export function planClientImport(r: ImportResult, containers: Container[]): Clie
     const items = r.items
       .filter((i) => i.folderKey && g.topKeys.has(topOf(i.folderKey).key))
       .map((i) => ({ ...i, folderKey: g.topKeys.has(i.folderKey!) ? null : i.folderKey }));
-    clients.push({ name: g.name, existing: writable, readOnly: !writable && existingAny.length > 0, folders, items });
+    const readOnly = !writable && existingAny.length > 0;
+    clients.push({ name: g.name, existing: writable, readOnly, cannotCreate: !writable && !readOnly && !canCreate, folders, items });
   }
   clients.sort((a, b) => a.name.localeCompare(b.name, "it"));
   return { clients, loose: r.items.filter((i) => !i.folderKey) };
@@ -397,9 +422,10 @@ export interface ClientImportSummary {
 
 /** Esegue il piano: crea i clienti mancanti e importa in ciascuno le sue credenziali. */
 export async function importAsClients(
-  vault: Vault, r: ImportResult, opts: { looseContainerId?: string | null; onProgress?: (text: string) => void } = {},
+  vault: Vault, input: ImportResult, opts: { looseContainerId?: string | null; onProgress?: (text: string) => void; level?: 1 | 2 } = {},
 ): Promise<ClientImportSummary> {
-  const plan = planClientImport(r, await vault.containers());
+  const r = opts.level === 2 ? dropTopLevel(input) : input;
+  const plan = planClientImport(r, await vault.containers(), { canCreate: vault.me.role === "admin" });
   const out: ClientImportSummary = { created: [], reused: [], imported: 0, loose: 0, duplicates: 0, skipped: [] };
   const sig = (d: ItemData) => JSON.stringify([norm(d.name), d.username ?? "", d.password ?? "", d.totpUri ?? ""]);
   /** Toglie gli elementi già presenti nella destinazione (stesso nome, utente, password e OTP). */
@@ -412,6 +438,10 @@ export async function importAsClients(
   for (const c of plan.clients) {
     if (c.readOnly) {
       out.skipped.push({ name: c.name, reason: `${c.items.length} elementi non importati: esiste già un cliente con questo nome ma hai solo la lettura` });
+      continue;
+    }
+    if (c.cannotCreate) {
+      out.skipped.push({ name: c.name, reason: `${c.items.length} elementi non importati: il cliente non esiste e solo un amministratore può crearlo` });
       continue;
     }
     if (!c.items.length && !c.folders.length) continue;
@@ -441,11 +471,14 @@ export async function importAsClients(
           const parent = f.parentKey ? reuse.get(f.parentKey) ?? created.get(f.parentKey) ?? null : null;
           created.set(f.key, await vault.createFolder(id, f.name, parent));
         }
+        const withFiles: { itemId: string; attachments: NonNullable<ImportedItem["attachments"]> }[] = [];
         for (const it of items) {
           const target = it.folderKey ? reuse.get(it.folderKey) ?? created.get(it.folderKey) ?? null : null;
-          await vault.createItem(id, it.data, target);
+          const newId = await vault.createItem(id, it.data, target);
+          if (it.attachments?.length) withFiles.push({ itemId: newId, attachments: it.attachments });
           out.imported++;
         }
+        await vault.attachToItems(id, withFiles);
       } else {
         out.imported += await vault.bulkCreate(id, r.source, c.folders, items);
       }

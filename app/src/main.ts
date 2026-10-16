@@ -1,5 +1,5 @@
 import { join } from "node:path";
-import { createPool, loadConfig, migrate } from "./core.js";
+import { createPool, loadConfig, migrate, pruneAudit } from "./core.js";
 import { APP_ROOT, buildApp } from "./server.js";
 
 const cfg = loadConfig();
@@ -25,6 +25,12 @@ const cleanup = async () => {
     await db.query("DELETE FROM items WHERE deleted_at < now() - interval '30 days'");
     await db.query("DELETE FROM attachments WHERE status = 'uploading' AND created_at < now() - interval '1 day'");
     await db.query("UPDATE users SET invite_token_hash = NULL WHERE invite_expires_at < now() - interval '30 days'");
+    if (cfg.auditRetentionMonths && cfg.auditRetentionMonths > 0) {
+      const before = new Date();
+      before.setMonth(before.getMonth() - cfg.auditRetentionMonths);
+      const n = await pruneAudit(db, before);
+      if (n) app.log.info({ rows: n }, "Registro di audit: righe oltre il periodo di conservazione eliminate");
+    }
   } catch (e) {
     app.log.error(e);
   }

@@ -165,8 +165,20 @@ export async function groupRoutes(app: FastifyInstance, ctx: Ctx) {
           [id, g.key_version, grant.userId]);
         if (others.rows[0].n === 0) throw conflict("last_group_manager");
       }
+      const existed = await c.query("SELECT 1 FROM group_members WHERE group_id = $1 AND key_version = $2 AND user_id = $3", [id, g.key_version, grant.userId]);
       await insertMember(c, grant, a.id);
       await audit(c, { actorId: a.id, action: "group.member_set", targetType: "user", targetId: grant.userId, ip: req.ip, details: { groupId: id, role: grant.role } });
+      return { notify: !existed.rowCount && grant.userId !== a.id, groupName: g.name };
+    }).then(async (r) => {
+      if (r.notify) {
+        const u = await db.query("SELECT id, email, display_name FROM users WHERE id = ANY($1::uuid[])", [[a.id, grant.userId]]);
+        const actor = u.rows.find((x) => x.id === a.id);
+        const rec = u.rows.find((x) => x.id === grant.userId);
+        if (rec && actor) {
+          await ctx.mailer.send(rec.email, `Sei nel gruppo ${r.groupName} su StartCredentials`,
+            `${actor.display_name} ti ha aggiunto al gruppo «${r.groupName}» su StartCredentials. Ora vedi anche i clienti condivisi con il gruppo.\n\n${ctx.cfg.publicUrl}\n`);
+        }
+      }
       return { ok: true };
     });
   });

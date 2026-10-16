@@ -11,9 +11,9 @@ import { randomBytes } from "node:crypto";
 import type { FastifyInstance } from "fastify";
 import {
   Api, ApiError, completeRecovery, decryptExport, enableMfa, importAsClients, importBitwarden, importCsv, importInto, importStartCredentials,
-  login, passwordHealth, register, SecurityError, serverStatus, setupMfa, Vault, verifyMfa,
+  login, passwordHealth, planClientImport, register, SecurityError, serverStatus, setupMfa, Vault, verifyMfa,
 } from "@startcredentials/client";
-import { Config, createPool, Db, migrate, totpAt } from "../src/core.js";
+import { Config, createPool, Db, migrate, pruneAudit, totpAt } from "../src/core.js";
 import { APP_ROOT, buildApp } from "../src/server.js";
 
 process.env.NODE_ENV = "test";
@@ -67,12 +67,13 @@ async function rejects(p: Promise<unknown>, code: string) {
 }
 
 const state: Record<string, any> = {};
+const sentMail: { to: string; subject: string; text: string }[] = [];
 
 before(async () => {
   db = createPool(DB_URL);
   await db.query("DROP SCHEMA public CASCADE; CREATE SCHEMA public;");
   await migrate(db, join(APP_ROOT, "migrations"));
-  app = await buildApp(cfg, db);
+  app = await buildApp(cfg, db, { mailer: { enabled: true, send: async (to, subject, text) => { sentMail.push({ to, subject, text }); return true; } } });
   await app.listen({ host: "127.0.0.1", port: 0 });
   const addr = app.server.address();
   base = `http://127.0.0.1:${typeof addr === "object" && addr ? addr.port : 0}`;
@@ -316,8 +317,11 @@ describe("StartCredentials end-to-end", () => {
   test("uscita di un collega: accessi tolti ovunque e chiavi ruotate", async () => {
     const marco: Vault = state.marco;
     const laura = await signIn("laura@azienda.it", "nuova master password", state.lauraId);
-    const solo = await laura.createContainer({ name: "Cliente solo di Laura" });
-    await laura.createItem(solo, { type: "login", name: "z", password: "w" });
+    const solo = await marco.createContainer({ name: "Cliente solo di Laura" });
+    await marco.createItem(solo, { type: "login", name: "z", password: "w" });
+    await marco.share(solo, state.lauraId, "manage");
+    await marco.api.del(`/containers/${solo}/members/${state.marcoId}`);
+    await laura.rotate(solo);
     const before = (await marco.containers()).find((c) => c.id === state.cid)!.keyVersion;
     // Laura è l'unica gestrice di un cliente: l'uscita si ferma finché non si conferma.
     await rejects(marco.offboard(state.lauraId), "containers_without_manager");
@@ -338,7 +342,13 @@ describe("StartCredentials end-to-end", () => {
     await marco.createItem(pid, { type: "login", name: "Debole", password: "abc123", urls: ["https://admin.example.com"] });
     await marco.createItem(pid, { type: "login", name: "Ripetuta 1", password: "Stessa-Password-2026!" });
     await marco.createItem(pid, { type: "login", name: "Ripetuta 2", password: "Stessa-Password-2026!" });
-    const exp = await marco.exportEncrypted("passphrase export lunga", FAST);
+    const deb = (await marco.items(pid)).find((i) => i.data.name === "Debole")!;
+    const pdf = new Uint8Array(1_500_000).map((_, i) => (i * 13) % 256);
+    await marco.addAttachment(deb, pdf, "contratto.pdf", "application/pdf");
+    const noAtt = await marco.exportEncrypted("passphrase export lunga", FAST);
+    assert.ok(noAtt.attachmentsSkipped >= 1);
+    const exp = await marco.exportEncrypted("passphrase export lunga", FAST, { includeAttachments: true });
+    assert.ok(exp.attachments >= 1);
     assert.ok(!exp.file.includes("Stessa-Password"), "l'export deve essere cifrato");
     assert.ok(exp.items >= 4);
     await assert.rejects(decryptExport(exp.file, "passphrase sbagliata!!"), SecurityError);
@@ -347,7 +357,11 @@ describe("StartCredentials end-to-end", () => {
     assert.ok(res.folders.some((f) => f.name === "Studio Legale Moretti"));
     const target = await marco.createContainer({ name: "Ripristino export" });
     await importInto(marco, target, res);
-    assert.equal((await marco.items(target)).length, exp.items);
+    const restored = await marco.items(target);
+    assert.equal(restored.length, exp.items);
+    const withPdf = restored.find((i) => i.data.name === "Debole")!;
+    assert.equal(withPdf.attachments[0]!.name, "contratto.pdf");
+    assert.deepEqual(await marco.downloadAttachment(withPdf, withPdf.attachments[0]!), pdf);
 
     const entries = [];
     for (const c of await marco.containers()) for (const item of await marco.items(c.id)) entries.push({ container: c, item });
@@ -423,8 +437,14 @@ describe("StartCredentials end-to-end", () => {
     const rossi = await marco.createContainer({ name: "Ferramenta Rossi" });
     await marco.createFolder(rossi, "Server");
     // Cliente omonimo su cui Marco ha solo la lettura.
-    const ro = await sara.createContainer({ name: "Solo Lettura Spa" });
-    await sara.share(ro, state.marcoId, "read");
+    await rejects(sara.createContainer({ name: "Non consentito" }), "admin_required");
+    await marco.setUser(state.saraId, { role: "admin" });
+    const saraAdmin = await signIn("sara@azienda.it", "nuova password di sara", state.saraId);
+    const ro = await saraAdmin.createContainer({ name: "Solo Lettura Spa" });
+    await saraAdmin.share(ro, state.marcoId, "read");
+    await marco.setUser(state.saraId, { role: "user" });
+    // La retrocessione chiude le sessioni: Sara rientra.
+    state.sara = await signIn("sara@azienda.it", "nuova password di sara", state.saraId);
     const csv = [
       "name,username,password,url,notes,folder",
       "NAS,admin,nas-1,https://nas.rossi.it,,Ferramenta Rossi/Server",
@@ -453,7 +473,7 @@ describe("StartCredentials end-to-end", () => {
     assert.equal(bd.folders.find((f) => f.name === "PEC")!.parentId, posta.id);
     assert.equal((await marco.items(bianchi.id))[0]!.data.password, "pec-1");
     assert.ok((await marco.items(personal)).some((i) => i.data.name === "Senza cartella"));
-    assert.equal((await sara.items(ro)).length, 0, "nessun elemento nel cliente in sola lettura");
+    assert.equal((await state.sara.items(ro)).length, 0, "nessun elemento nel cliente in sola lettura");
 
     // Secondo import identico: niente doppioni, nessun cliente nuovo.
     const again = await importAsClients(marco, importCsv(csv, "passbolt"), { looseContainerId: personal });
@@ -461,6 +481,28 @@ describe("StartCredentials end-to-end", () => {
     assert.equal(again.imported, 0);
     assert.equal(again.duplicates, 4);
     assert.equal((await marco.items(rossi)).length, 2);
+
+    // Export racchiuso in un'unica cartella esterna: i clienti sono al secondo livello.
+    const wrapped = importCsv([
+      "name,username,password,url,notes,folder",
+      "NAS,admin,nas-1,,,Passbolt/Ferramenta Rossi/Server",
+      "Mail,info,m-1,,,Passbolt/Verdi Snc",
+      "Radice,x,y,,,Passbolt",
+    ].join("\n"), "passbolt");
+    const lvl1 = planClientImport(wrapped, await marco.containers(), { level: 1 });
+    assert.deepEqual(lvl1.clients.map((c) => c.name), ["Passbolt"]);
+    const lvl2 = planClientImport(wrapped, await marco.containers(), { level: 2 });
+    assert.deepEqual(lvl2.clients.map((c) => c.name), ["Ferramenta Rossi", "Verdi Snc"]);
+    assert.deepEqual(lvl2.clients[0]!.folders.map((f) => f.name), ["Server"]);
+    assert.equal(lvl2.loose.length, 1, "gli elementi nella cartella esterna restano senza cliente");
+
+    // Un utente non amministratore non crea clienti: importa solo in quelli esistenti a cui può scrivere.
+    await marco.share(rossi, state.saraId, "write");
+    const plain = importCsv("name,username,password,url,notes,folder\nNuovo,u,p,,,Ferramenta Rossi\nAltro,u,p,,,Cliente Inesistente\n", "passbolt");
+    const bySara = await importAsClients(state.sara, plain, { looseContainerId: null });
+    assert.deepEqual(bySara.created, []);
+    assert.deepEqual(bySara.reused, ["Ferramenta Rossi"]);
+    assert.ok(bySara.skipped.some((x) => x.name === "Cliente Inesistente" && /amministratore/.test(x.reason)));
   });
 
   test("selezione multipla: cestino e ripristino di più elementi, controlli di permesso", async () => {
@@ -474,6 +516,15 @@ describe("StartCredentials end-to-end", () => {
     assert.equal((await marco.items(cid, { trash: true })).length, 3);
     assert.equal(await marco.restoreItems(cid, ids.slice(0, 2)), 2);
     assert.equal((await marco.items(cid)).length, 3);
+    // Spostamento in cartella: solo la cartella cambia, i dati restano leggibili.
+    const fid = await marco.createFolder(cid, "Archivio");
+    assert.equal(await marco.moveItems(cid, ids.slice(0, 2), fid), 2);
+    const moved = await marco.items(cid);
+    assert.deepEqual(moved.filter((i) => i.folderId === fid).map((i) => i.data.name).sort(), ["A", "B"]);
+    assert.equal(moved.find((i) => i.data.name === "A")!.data.password, "A");
+    assert.equal(await marco.moveItems(cid, [ids[0]!], null), 1);
+    const foreignFolder = await marco.createFolder(await marco.createContainer({ name: "Cartella estranea" }), "X");
+    await rejects(marco.moveItems(cid, [ids[1]!], foreignFolder), "invalid_folder");
     // Un elemento di un altro contenitore nella stessa richiesta: rifiutata per intero.
     const other = await marco.createContainer({ name: "Altro" });
     const foreign = await marco.createItem(other, { type: "note", name: "estraneo" });
@@ -487,6 +538,164 @@ describe("StartCredentials end-to-end", () => {
     assert.equal(log.filter((l) => l.action === "item.restored").length, 2);
   });
 
+  test("rotazione della chiave dell'organizzazione: catena seguita dai client, quote nuove, certificazioni rinnovate", async () => {
+    const marco: Vault = state.marco;
+    const oldPin: string = marco.me.org!.signPublic;
+    const oldShares: string[] = state.shares;
+    const r = await marco.rotateOrgKeys(3, 2);
+    assert.notEqual(marco.me.org!.signPublic, oldPin);
+    assert.equal(r.shares.length, 3);
+
+    // Sara riapre la cassaforte con la chiave vecchia fissata: la catena firmata viene accettata.
+    const sara = await signIn("sara@azienda.it", "nuova password di sara", state.saraId).catch(async () => {
+      const a = api();
+      await login(a, "sara@azienda.it", "nuova password di sara");
+      await verifyMfa(a, await mfaCode(state.saraId));
+      return Vault.unlock(a, "nuova password di sara", { pinnedOrgSignPublic: oldPin });
+    });
+    const again = await Vault.unlock(sara.api, "nuova password di sara", { pinnedOrgSignPublic: oldPin });
+    assert.equal(again.me.org!.signPublic, marco.me.org!.signPublic);
+    // Le certificazioni nuove si verificano con la nuova chiave: accesso diretto e tramite gruppo funzionano.
+    const dir = await again.directory(true);
+    assert.ok(dir.find((u) => u.id === state.marcoId)!.verified);
+    const viaGroup = (await again.containers()).find((c) => c.meta.name === "Cliente del gruppo");
+    assert.ok(viaGroup, "cliente visibile tramite gruppo");
+    assert.equal((await again.items(viaGroup!.id))[0]!.data.password, "nas-nuova");
+    assert.ok((await again.groups()).every((g) => g.verified));
+
+    // Copie di recupero: azzerate dalla rotazione, ricreate dal client con la nuova chiave.
+    assert.equal(again.me.hasRecovery, false);
+    assert.equal(await again.ensureRecoveryCopy(), true);
+    await assert.rejects(marco.startRecovery(state.saraId, oldShares.slice(0, 2), FAST), SecurityError);
+    const rec = await marco.startRecovery(state.saraId, r.shares.slice(0, 2), FAST);
+    assert.ok(rec.code);
+
+    // Una sessione già aperta segue la rotazione senza nuovo sblocco.
+    const resumed = await Vault.restore(sara.api, again.serialize(), { pinnedOrgSignPublic: oldPin });
+    assert.equal(resumed.me.org!.signPublic, marco.me.org!.signPublic);
+
+    // Server compromesso: chiave diversa senza catena firmata dalla chiave fissata.
+    const forged = { ...again.me, org: { ...again.me.org!, signPublic: "chiave-falsa", rotations: [] } };
+    await rejects(Vault.restore(api(), { v: 1, me: forged, keys: again.serialize().keys }, { pinnedOrgSignPublic: oldPin, refresh: false }), "security");
+    state.shares = r.shares;
+  });
+
+  test("condivisione di una singola password: sola lettura, revoca con ricifratura", async () => {
+    const marco: Vault = state.marco;
+    const sara: Vault = state.sara;
+    // Come fa l'estensione alla ripresa della sessione: rilegge l'organizzazione (ruotata in un test precedente).
+    await sara.refreshMe();
+    const paoloId = (await db.query("SELECT id FROM users WHERE email = 'paolo@azienda.it'")).rows[0].id;
+    const paolo = await signIn("paolo@azienda.it", "paolo master password", paoloId);
+    const cid = await marco.createContainer({ name: "Cliente riservato" });
+    const iid = await marco.createItem(cid, { type: "login", name: "Router riservato", username: "admin", password: "solo-questa", urls: ["https://router.riservato.it"] });
+    let [item] = await marco.items(cid);
+    await marco.updateItem(item!, { ...item!.data, password: "solo-questa-2" });
+    [item] = await marco.items(cid);
+    const doc = new Uint8Array(300_000).map((_, i) => (i * 7) % 256);
+    await marco.addAttachment(item!, doc, "schema.pdf", "application/pdf");
+    [item] = await marco.items(cid);
+    await marco.shareItem(item!, state.saraId);
+    await marco.shareItem(item!, paoloId);
+    assert.equal((await marco.itemShares(iid)).length, 2);
+
+    // Sara vede solo quell'elemento, non il cliente.
+    assert.ok(!(await sara.containers()).some((c) => c.id === cid));
+    await rejects(sara.items(cid), "container_not_found");
+    const got = (await sara.sharedWithMe()).find((i) => i.id === iid)!;
+    assert.equal(got.data.password, "solo-questa-2");
+    assert.equal(got.sharedBy, "Marco Ferri");
+    assert.deepEqual(await sara.downloadAttachment(got, got.attachments[0]!), doc);
+    assert.equal((await sara.lookup("https://router.riservato.it/login")).length, 1);
+
+    // Revoca: nuova chiave per dati, versioni, allegati; Paolo la riceve, Sara no.
+    const before = (await marco.items(cid))[0]!.ikVersion;
+    await marco.unshareItem((await marco.items(cid))[0]!, state.saraId);
+    const after = (await marco.items(cid))[0]!;
+    assert.equal(after.ikVersion, before + 1);
+    assert.ok(!(await sara.sharedWithMe()).some((i) => i.id === iid));
+    await rejects(sara.downloadAttachment(got, got.attachments[0]!), "container_not_found");
+    const p2 = (await paolo.sharedWithMe()).find((i) => i.id === iid)!;
+    assert.equal(p2.data.password, "solo-questa-2");
+    assert.deepEqual(await paolo.downloadAttachment(p2, p2.attachments[0]!), doc);
+    assert.equal((await marco.itemVersions(after))[0]!.data.password, "solo-questa");
+    assert.deepEqual(await marco.downloadAttachment(after, after.attachments[0]!), doc);
+
+    // Una consegna vecchia (chiave precedente) non viene più accettata.
+    const old = (await db.query("SELECT * FROM item_shares WHERE item_id = $1 AND user_id = $2", [iid, paoloId])).rows[0];
+    await rejects(marco.api.post(`/items/${iid}/shares`, { share: {
+      itemId: iid, containerId: cid, ikVersion: before, userId: state.saraId, sealedKey: old.sealed_key, grantedBy: state.marcoId, signature: old.signature } }), "stale_item_key");
+    // Chi non gestisce il cliente non può condividere.
+    await marco.share(cid, state.saraId, "write");
+    const asWriter = (await sara.items(cid))[0]!;
+    await rejects(sara.shareItem(asWriter, paoloId), "manage_required");
+  });
+
+  test("aggiornamenti: un collega vede i cambiamenti dei clienti che può leggere, e solo quelli", async () => {
+    const marco: Vault = state.marco;
+    const sara: Vault = state.sara;
+    const shared = await marco.createContainer({ name: "Condiviso per aggiornamenti" });
+    const secret = await marco.createContainer({ name: "Non condiviso" });
+    await marco.share(shared, state.saraId, "read");
+    const { latest } = await sara.changes(0);
+    await marco.createItem(shared, { type: "note", name: "nuova" });
+    await marco.createItem(secret, { type: "note", name: "riservata" });
+    const ch = await sara.changes(latest);
+    assert.deepEqual(ch.containers, [shared], "solo i clienti visibili a Sara");
+    assert.ok(ch.latest > latest);
+    // Accesso tolto: Sara deve ricaricare l'elenco dei clienti.
+    const before = (await sara.changes(0)).latest;
+    await marco.revoke(shared, state.saraId);
+    const ch2 = await sara.changes(before);
+    assert.equal(ch2.membership, true);
+    assert.ok(!ch2.containers.includes(secret));
+  });
+
+  test("notifiche email: nuovo accesso a un cliente e ingresso in un gruppo, senza nomi dei clienti", async () => {
+    const marco: Vault = state.marco;
+    sentMail.length = 0;
+    const cid = await marco.createContainer({ name: "Cliente Segretissimo" });
+    await marco.share(cid, state.saraId, "read");
+    assert.equal(sentMail.length, 1);
+    assert.equal(sentMail[0]!.to, "sara@azienda.it");
+    assert.match(sentMail[0]!.text, /Marco Ferri ti ha dato accesso a un cliente/);
+    assert.match(sentMail[0]!.text, /sola lettura/);
+    assert.ok(!sentMail[0]!.text.includes("Segretissimo"), "il nome del cliente non va nelle email");
+    // Cambio di permesso: nessuna nuova email.
+    await marco.share(cid, state.saraId, "write");
+    assert.equal(sentMail.length, 1);
+    const gid = await marco.createGroup("Reperibilità");
+    await marco.setGroupMember(gid, state.saraId, "member");
+    assert.equal(sentMail.length, 2);
+    assert.match(sentMail[1]!.subject, /gruppo Reperibilità/);
+  });
+
+  test("intestazioni di sicurezza: CSP senza eccezioni e cache corretta (rilievi del vulnerability assessment)", async () => {
+    for (const path of ["/", "/privacy"]) {
+      const r = await fetch(`${base}${path}`);
+      assert.equal(r.status, 200);
+      const csp = r.headers.get("content-security-policy") ?? "";
+      assert.ok(!csp.includes("unsafe-inline") && !csp.includes("unsafe-eval"), `${path}: CSP senza eccezioni`);
+      assert.match(csp, /default-src 'none'/);
+      assert.match(csp, /style-src 'self'/);
+      assert.match(csp, /frame-ancestors 'none'/);
+      assert.equal(r.headers.get("cache-control"), "no-store");
+      const html = await r.text();
+      assert.ok(!/<style|style=|<script/i.test(html), `${path}: nessuno stile o script in linea`);
+      for (const ref of html.match(/(?:href|src)="(\/[^"]+)"/g) ?? []) {
+        const url = ref.replace(/^(?:href|src)="/, "").replace(/"$/, "");
+        if (!url.includes("?v=")) continue;
+        const a = await fetch(`${base}${url}`);
+        assert.equal(a.status, 200, url);
+        assert.equal(a.headers.get("cache-control"), "public, max-age=31536000, immutable", url);
+      }
+    }
+    const api = await fetch(`${base}/api/v1/health`);
+    assert.equal(api.headers.get("cache-control"), "no-store");
+    assert.match(api.headers.get("strict-transport-security") ?? "", /max-age=63072000/);
+    assert.equal(api.headers.get("x-content-type-options"), "nosniff");
+  });
+
   test("sospensione e registro di audit a prova di manomissione", async () => {
     const marco: Vault = state.marco;
     await marco.setUser(state.lauraId, { status: "suspended" });
@@ -495,9 +704,21 @@ describe("StartCredentials end-to-end", () => {
     const log = await marco.auditLog({ limit: 500 });
     for (const action of ["org.initialized", "user.key_certified", "container.key_rotated", "container.imported", "user.recovery_completed", "auth.login_failed",
                           "auth.mfa_backup_used", "user.mfa_reset", "user.password_changed", "user.offboarded", "container.export",
-                          "group.created", "group.member_set", "group.member_removed", "group.key_rotated", "container.group_set"]) {
+                          "group.created", "group.member_set", "group.member_removed", "group.key_rotated", "container.group_set", "org.key_rotated",
+                          "item.shared", "item.unshared", "item.rekeyed"]) {
       assert.ok(log.some((l) => l.action === action), `manca ${action}`);
     }
+    assert.equal((await marco.verifyAudit()).ok, true);
+    // Conservazione: le righe più vecchie spariscono, la catena resta verificabile dall'ancora.
+    const total = Number((await db.query("SELECT count(*) AS n FROM audit_log")).rows[0].n);
+    const cut = (await db.query("SELECT at FROM audit_log ORDER BY id OFFSET $1 LIMIT 1", [Math.floor(total / 2)])).rows[0].at;
+    const pruned = await pruneAudit(db, new Date(cut));
+    assert.ok(pruned > 0 && pruned < total);
+    const after = await marco.verifyAudit();
+    assert.equal(after.ok, true);
+    assert.ok(after.prunedUpTo);
+    assert.ok((await marco.auditLog({ limit: 5 })).some((l) => l.action === "audit.pruned"));
+    for (const n of ["Dopo la pulizia 1", "Dopo la pulizia 2"]) await marco.createContainer({ name: n });
     assert.equal((await marco.verifyAudit()).ok, true);
     await db.query("UPDATE audit_log SET details = '{\"falso\":true}' WHERE id = (SELECT min(id) + 3 FROM audit_log)");
     const v = await marco.verifyAudit();
