@@ -2,16 +2,16 @@
   "expo": {
     "name": "StartCredentials",
     "slug": "startcredentials",
-    "version": "0.8.0",
+    "version": "0.6.0",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
-    "userInterfaceStyle": "automatic",
+    "userInterfaceStyle": "light",
     "ios": {
       "supportsTablet": true
     },
     "android": {
       "package": "it.startapp.credentials",
-      "versionCode": 3,
+      "versionCode": 1,
       "allowBackup": false,
       "adaptiveIcon": {
         "backgroundColor": "#0068CF",
@@ -43,15 +43,7 @@
           "imageWidth": 220,
           "backgroundColor": "#FFFFFF"
         }
-      ],
-      [
-        "expo-camera",
-        {
-          "cameraPermission": "StartCredentials usa la fotocamera solo per leggere i QR code dei codici OTP.",
-          "recordAudioAndroid": false
-        }
-      ],
-      "./plugins/autofill"
+      ]
     ],
     "scheme": "startcredentials"
   }

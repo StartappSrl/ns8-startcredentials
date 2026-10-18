@@ -7,16 +7,11 @@ import {
 } from "./storage";
 import { color } from "../theme";
 
-export type Phase = "boot" | "setup" | "register" | "login" | "mfa" | "mfaSetup" | "ready";
+export type Phase = "boot" | "setup" | "login" | "mfa" | "mfaSetup" | "ready";
 export type Route =
   | { name: "clients" } | { name: "search" } | { name: "shared" } | { name: "settings" }
-  | { name: "container"; id: string; title: string; canWrite: boolean; canManage: boolean }
-  | { name: "item"; item: Item; where: string; canWrite: boolean; canManage?: boolean }
-  | { name: "history"; item: Item; where: string }
-  | { name: "share"; containerId: string; title: string }
-  | { name: "itemShare"; item: Item }
-  | { name: "health" } | { name: "changePassword" } | { name: "backupCodes" }
-  | { name: "edit"; containerId: string; containerTitle: string; item?: Item };
+  | { name: "container"; id: string; title: string }
+  | { name: "item"; item: Item; where: string };
 
 interface Ctx {
   phase: Phase;
@@ -27,10 +22,6 @@ interface Ctx {
   fingerprint: string;
   /** Password tenuta in memoria solo tra accesso e sblocco. */
   pendingPassword: React.MutableRefObject<string | null>;
-  /** Codice d'invito in attesa di registrazione. */
-  inviteToken: React.MutableRefObject<string | null>;
-  /** Cresce quando i colleghi cambiano qualcosa: le schermate si ricaricano. */
-  refreshTick: number;
   afterUnlock(r: { me: Me; fingerprint: string }): Promise<void>;
   biometricUnlock(): Promise<string | null>;
   lock(): Promise<void>;
@@ -38,8 +29,6 @@ interface Ctx {
   route: Route;
   push(r: Route): void;
   pop(): void;
-  /** Torna indietro di n schermate. */
-  back(n: number): void;
   tab(r: Route): void;
   toast(msg: string): void;
 }
@@ -72,8 +61,6 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const [stack, setStack] = useState<Route[]>([{ name: "clients" }]);
   const [toastMsg, setToastMsg] = useState<string | null>(null);
   const pendingPassword = useRef<string | null>(null);
-  const inviteToken = useRef<string | null>(null);
-  const [refreshTick, setRefreshTick] = useState(0);
   const backgroundAt = useRef<number | null>(null);
   const toastTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
 
@@ -169,41 +156,6 @@ export function AppProvider({ children }: { children: ReactNode }) {
     return () => sub.remove();
   }, [settings.autoLockMinutes, phase]);
 
-  // Sessione scaduta sul server: si torna allo sblocco con un messaggio chiaro.
-  useEffect(() => {
-    engine.onUnauthorized(() => {
-      if (phase !== "ready") return;
-      void lock().then(() => toast("Sessione scaduta: sblocca di nuovo"));
-    });
-    return () => engine.onUnauthorized(null);
-  }, [phase]);
-
-  // Aggiornamenti dai colleghi: ogni 30 secondi, con l'app attiva e la rete.
-  useEffect(() => {
-    if (phase !== "ready") return;
-    let since = 0;
-    let busy = false;
-    const tick = async () => {
-      if (busy || AppState.currentState !== "active") return;
-      busy = true;
-      try {
-        const r = await engine.call<{ latest: number; containers: string[]; membership: boolean }>("changes", since);
-        if (since && (r.containers.length || r.membership)) {
-          setRefreshTick((t) => t + 1);
-          if (settings.offline !== false) void engine.syncForOffline();
-        }
-        since = r.latest;
-      } catch {
-        /* offline: si riprova */
-      } finally {
-        busy = false;
-      }
-    };
-    void tick();
-    const t = setInterval(tick, 30_000);
-    return () => clearInterval(t);
-  }, [phase]);
-
   // Tasto Indietro di Android.
   useEffect(() => {
     const sub = BackHandler.addEventListener("hardwareBackPress", () => {
@@ -217,11 +169,10 @@ export function AppProvider({ children }: { children: ReactNode }) {
   }, [phase, stack.length]);
 
   const value: Ctx = {
-    phase, setPhase, settings, updateSettings, me, fingerprint, pendingPassword, inviteToken, refreshTick, afterUnlock, biometricUnlock, lock, logout,
+    phase, setPhase, settings, updateSettings, me, fingerprint, pendingPassword, afterUnlock, biometricUnlock, lock, logout,
     route: stack[stack.length - 1]!,
     push: (r) => setStack((st) => [...st, r]),
     pop: () => setStack((st) => (st.length > 1 ? st.slice(0, -1) : st)),
-    back: (n) => setStack((st) => st.slice(0, Math.max(1, st.length - n))),
     tab: (r) => setStack([r]),
     toast,
   };
@@ -229,7 +180,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
     <AppCtx.Provider value={value}>
       {children}
       {toastMsg && (
-        <View style={{ position: "absolute", left: 16, right: 16, bottom: 90, backgroundColor: "#0B1B2E", borderRadius: 10, padding: 12, borderWidth: 1, borderColor: "#2A4669" }} accessibilityLiveRegion="polite">
+        <View style={{ position: "absolute", left: 16, right: 16, bottom: 90, backgroundColor: color.ink, borderRadius: 10, padding: 12 }} accessibilityLiveRegion="polite">
           <Text style={{ color: "#fff", fontSize: 14, textAlign: "center" }}>{toastMsg}</Text>
         </View>
       )}

@@ -7,8 +7,8 @@
  *     WebView non contatta nessuno direttamente.
  */
 import {
-  Api, ApiError, effectiveTotpUri, enableMfa, generatePassword, Item, ItemData, KEEPASS_TOTP_FIELDS, login, logout, passwordHealth,
-  Permission, ready, register, SecurityError, serverStatus, SerializedSession, setupMfa, trustDevice, Vault, verifyMfa,
+  Api, ApiError, effectiveTotpUri, enableMfa, Item, login, logout, ready, SecurityError, serverStatus,
+  SerializedSession, setupMfa, trustDevice, Vault, verifyMfa,
 } from "@startcredentials/client";
 
 type Msg =
@@ -141,144 +141,6 @@ const methods: Record<string, (...args: never[]) => unknown> = {
   devices: async () => needVault().devices(),
   revokeDevice: async (id: string) => { await needVault().revokeDevice(id); return true; },
   me: () => ({ me: needVault().me, fingerprint: needVault().myFingerprint }),
-  // ---------------------------------------------------------------- primo accesso da invito
-
-  async register(token: string, password: string) {
-    const r = await register(needApi(), { token, password });
-    return { state: r.state, userId: r.userId };
-  },
-
-  // ---------------------------------------------------------------- cestino, cronologia, allegati
-
-  restoreItem: async (itemId: string) => { await needVault().restoreItem(itemId); return true; },
-  async itemVersions(itemId: string) {
-    const it = itemCache.get(itemId);
-    if (!it) throw new Error("Elemento non trovato: ricarica il cliente");
-    return needVault().itemVersions(it);
-  },
-  async restoreVersion(itemId: string, revision: number) {
-    const it = itemCache.get(itemId);
-    if (!it) throw new Error("Elemento non trovato: ricarica il cliente");
-    const v = (await needVault().itemVersions(it)).find((x) => x.revision === revision);
-    if (!v) throw new Error("Versione non trovata");
-    return needVault().updateItem(it, v.data);
-  },
-  async addAttachment(itemId: string, dataB64: string, name: string, mime: string) {
-    const it = itemCache.get(itemId);
-    if (!it) throw new Error("Elemento non trovato: ricarica il cliente");
-    await needVault().addAttachment(it, fromB64(dataB64), name, mime || "application/octet-stream");
-    return true;
-  },
-  deleteAttachment: async (attachmentId: string) => { await needVault().deleteAttachment(attachmentId); return true; },
-
-  // ---------------------------------------------------------------- condivisioni
-
-  members: async (containerId: string) => needVault().members(containerId),
-  directory: async () => needVault().directory(true),
-  share: async (containerId: string, userId: string, permission: Permission) => { await needVault().share(containerId, userId, permission); return true; },
-  revoke: async (containerId: string, userId: string) => { await needVault().revoke(containerId, userId); return true; },
-  groups: async () => needVault().groups(),
-  containerGroups: async (containerId: string) => needVault().containerGroups(containerId),
-  shareWithGroup: async (containerId: string, groupId: string, permission: Permission) => { await needVault().shareWithGroup(containerId, groupId, permission); return true; },
-  unshareGroup: async (containerId: string, groupId: string) => { await needVault().unshareGroup(containerId, groupId); return true; },
-  itemShares: async (itemId: string) => needVault().itemShares(itemId),
-  async shareItem(itemId: string, userId: string) {
-    const it = itemCache.get(itemId);
-    if (!it) throw new Error("Elemento non trovato: ricarica il cliente");
-    await needVault().shareItem(it, userId);
-    return true;
-  },
-  async unshareItem(itemId: string, userId: string) {
-    const it = itemCache.get(itemId);
-    if (!it) throw new Error("Elemento non trovato: ricarica il cliente");
-    await needVault().unshareItem(it, userId);
-    return true;
-  },
-
-  // ---------------------------------------------------------------- account
-
-  changePassword: async (current: string, next: string, code: string) => { await needVault().changePassword(current, next, code); return true; },
-  mfaStatus: async () => needVault().mfaStatus(),
-  regenerateBackupCodes: async (code: string) => needVault().regenerateBackupCodes(code),
-  /** Rapporto sulla salute delle password, calcolato qui: all'app vanno solo nomi e motivi. */
-  async health() {
-    const v = needVault();
-    const entries = [];
-    for (const c of await v.containers()) {
-      if (c.kind === "org") continue;
-      for (const item of remember(await v.items(c.id))) entries.push({ container: c, item });
-    }
-    const r = passwordHealth(entries);
-    const ref = (e: { container: { kind: string; meta: { name: string } }; item: Item }) => ({
-      itemId: e.item.id, name: e.item.data.name, where: e.container.kind === "personal" ? "Area personale" : e.container.meta.name,
-    });
-    return {
-      checked: r.checked,
-      weak: r.weak.map(ref),
-      reused: r.reused.map((g) => g.map(ref)),
-      old: r.old.map(ref),
-      missingOtp: r.missingOtp.map(ref),
-    };
-  },
-  /** Elemento già decifrato, per aprirlo da un rapporto o da una notifica. */
-  item: (itemId: string) => itemCache.get(itemId) ?? null,
-
-  // ---------------------------------------------------------------- autofill
-
-  /** Credenziali del dominio esatto (richieste dai browser). */
-  async lookup(url: string) {
-    const hits = await needVault().lookup(url);
-    remember(hits.map((h) => h.item));
-    return hits.map((h) => ({ item: h.item, where: h.container.kind === "personal" ? "Area personale" : h.container.meta.name, canWrite: h.container.permission !== "read" }));
-  },
-  /** Tutte le credenziali leggibili, con il cliente e il permesso. */
-  async allItems() {
-    const v = needVault();
-    const out: { item: Item; where: string; canWrite: boolean }[] = [];
-    for (const c of await v.containers()) {
-      if (c.kind === "org") continue;
-      for (const item of remember(await v.items(c.id))) out.push({ item, where: c.kind === "personal" ? "Area personale" : c.meta.name, canWrite: c.permission !== "read" });
-    }
-    for (const item of remember(await v.sharedWithMe().catch(() => [] as Item[]))) out.push({ item, where: `Condivisa da ${item.sharedBy}`, canWrite: false });
-    return out;
-  },
-  /** Credenziali associate a un'app Android (indirizzo androidapp://pacchetto). */
-  async lookupApp(packageName: string) {
-    const key = `androidapp://${packageName}`.toLowerCase();
-    return (await methods.allItems() as { item: Item; where: string; canWrite: boolean }[])
-      .filter((r) => (r.item.data.urls ?? []).some((u) => u.trim().toLowerCase() === key));
-  },
-
-  // ---------------------------------------------------------------- modifiche
-
-  createItem: async (containerId: string, data: ItemData, folderId: string | null) => needVault().createItem(containerId, data, folderId),
-  async updateItem(itemId: string, data: ItemData, folderId?: string | null) {
-    const it = itemCache.get(itemId);
-    if (!it) throw new Error("Elemento non trovato: ricarica il cliente");
-    // Un OTP vero sostituisce gli eventuali campi OTP rimasti da un import KeePass/Passbolt.
-    const clean: ItemData = data.totpUri ? { ...data, fields: (data.fields ?? []).filter((f) => !KEEPASS_TOTP_FIELDS.includes(f.label)) } : data;
-    return needVault().updateItem(it, clean, folderId);
-  },
-  deleteItem: async (itemId: string) => { await needVault().deleteItem(itemId); itemCache.delete(itemId); return true; },
-  createFolder: async (containerId: string, name: string, parentId: string | null) => needVault().createFolder(containerId, name, parentId),
-  generatePassword: (length = 20, symbols = true) => generatePassword({ length, symbols }),
-  /**
-   * Normalizza un OTP inserito o scansionato: link otpauth:// oppure chiave
-   * Base32. Restituisce l'URI e il codice attuale, per il confronto prima di salvare.
-   */
-  async parseTotp(input: string, label: string) {
-    const t = input.trim();
-    let uri: string;
-    if (/^otpauth:\/\//i.test(t)) uri = t;
-    else {
-      const secret = t.replace(/[\s-]/g, "").toUpperCase().replace(/=+$/, "");
-      if (!/^[A-Z2-7]{16,}$/.test(secret)) throw new Error("Chiave non valida: deve essere un link otpauth:// o una chiave Base32 (lettere A-Z e cifre 2-7)");
-      uri = `otpauth://totp/${encodeURIComponent(label || "StartCredentials")}?secret=${secret}`;
-    }
-    const code = await Vault.totp(uri);
-    return { uri, code: code.code, secondsLeft: code.secondsLeft };
-  },
-
   /** Legge tutto ciò che serve offline: l'app ne conserva le risposte cifrate. */
   async syncAll() {
     const v = needVault();

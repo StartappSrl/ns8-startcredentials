@@ -1,13 +1,11 @@
 {
   "name": "startcredentials-mobile",
-  "version": "0.8.0",
+  "version": "0.6.0",
   "main": "index.ts",
   "dependencies": {
     "expo": "~57.0.30",
-    "expo-camera": "~57.0.6",
     "expo-clipboard": "~57.0.2",
     "expo-crypto": "~57.0.4",
-    "expo-document-picker": "~57.0.3",
     "expo-file-system": "~57.0.7",
     "expo-local-authentication": "~57.0.3",
     "expo-screen-capture": "~57.0.4",

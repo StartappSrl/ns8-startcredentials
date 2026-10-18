@@ -5,8 +5,6 @@ import { errorText, useApp } from "../state/App";
 import { biometricAvailable, clearBiometricSession, clearDeviceTrust, saveBiometricSession } from "../state/storage";
 import { Button, Card, Notice } from "../ui/kit";
 import { Header } from "./Vault";
-import { AppState } from "react-native";
-import { Autofill } from "../../modules/sc-autofill";
 import { color, mono } from "../theme";
 
 const LOCKS = [0, 1, 5, 15];
@@ -17,12 +15,6 @@ export function SettingsScreen() {
   const [devices, setDevices] = useState<{ id: string; name: string; expiresAt: string }[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [syncing, setSyncing] = useState(false);
-  const [autofillOn, setAutofillOn] = useState(Autofill.isEnabled());
-  // Al ritorno dalle impostazioni di Android si aggiorna lo stato.
-  useEffect(() => {
-    const sub = AppState.addEventListener("change", (st) => { if (st === "active") setAutofillOn(Autofill.isEnabled()); });
-    return () => sub.remove();
-  }, []);
   const loadDevices = () => engine.call<{ devices: { id: string; name: string; expiresAt: string }[] }>("devices").then((r) => setDevices(r.devices)).catch(() => undefined);
   useEffect(() => { void loadDevices(); }, []);
 
@@ -62,16 +54,6 @@ export function SettingsScreen() {
             ))}
           </View>
         </Card>
-        {Autofill.isSupported() && (
-          <Card>
-            <Text style={{ fontWeight: "700", color: color.ink }}>Compilazione automatica</Text>
-            <Text style={{ color: color.muted }}>
-              {autofillOn ? "StartCredentials compila utente, password e OTP nelle app e nei siti." : "Scegli StartCredentials come servizio di compilazione automatica di Android."}
-            </Text>
-            {!autofillOn && <Button title="Attiva nelle impostazioni di Android" onPress={() => Autofill.openSettings()} />}
-            <Text style={{ color: color.muted, fontSize: 13 }}>In Chrome attiva anche Impostazioni → Compilazione automatica → «Compila automaticamente utilizzando un altro servizio».</Text>
-          </Card>
-        )}
         <Card>
           <Text style={{ fontWeight: "700", color: color.ink }}>Uso offline</Text>
           <View style={{ flexDirection: "row", alignItems: "center", gap: 10 }}>
@@ -106,12 +88,6 @@ export function SettingsScreen() {
               <Button kind="danger" title="Revoca" onPress={async () => { await engine.call("revokeDevice", d.id).catch(() => undefined); void loadDevices(); }} style={{ minHeight: 40, paddingHorizontal: 12 }} />
             </View>
           ))}
-        </Card>
-        <Card>
-          <Text style={{ fontWeight: "700", color: color.ink }}>Account</Text>
-          <Button title="Salute delle password" kind="secondary" onPress={() => app.push({ name: "health" })} />
-          <Button title="Cambia la master password" kind="secondary" disabled={engine.offline} onPress={() => app.push({ name: "changePassword" })} />
-          <Button title="Codici di riserva MFA" kind="secondary" disabled={engine.offline} onPress={() => app.push({ name: "backupCodes" })} />
         </Card>
         {error && <Notice kind="error">{error}</Notice>}
         <Button title="Blocca ora" kind="secondary" onPress={() => void app.lock()} />

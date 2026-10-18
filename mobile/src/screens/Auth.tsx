@@ -31,15 +31,9 @@ export function SetupScreen() {
   const submit = async () => {
     setError(null);
     let origin: string;
-    let invite: string | null = null;
     try {
       const t = value.trim();
-      const u = new URL(t.includes("://") ? t : `https://${t}`);
-      origin = u.origin;
-      // Collegamento d'invito: https://server/#invite=CODICE
-      const h = new URLSearchParams(u.hash.replace(/^#/, ""));
-      const code = h.get("invite");
-      if (code && /^[A-Za-z0-9_-]{16,200}$/.test(code)) invite = code;
+      origin = new URL(t.includes("://") ? t : `https://${t}`).origin;
     } catch {
       return setError("Indirizzo non valido.");
     }
@@ -50,10 +44,7 @@ export function SetupScreen() {
       await engine.call("init", origin, "");
       await engine.call("status");
       await app.updateSettings({ serverUrl: origin });
-      if (invite) {
-        app.inviteToken.current = invite;
-        app.setPhase("register");
-      } else app.setPhase("login");
+      app.setPhase("login");
     } catch {
       setError("A questo indirizzo non risponde un server StartCredentials.");
     } finally {
@@ -61,11 +52,11 @@ export function SetupScreen() {
     }
   };
   return (
-    <Frame title="Collega il server" intro="Incolla il collegamento d'invito ricevuto per email, oppure l'indirizzo del server della tua azienda (per esempio secures.startappitalia.it).">
-      <Field label="Collegamento d'invito o indirizzo del server" value={value} onChangeText={setValue} keyboardType="url" placeholder="secures.startappitalia.it" onSubmitEditing={submit} />
+    <Frame title="Collega il server" intro="Inserisci l'indirizzo del server StartCredentials della tua azienda, per esempio secures.startappitalia.it.">
+      <Field label="Indirizzo del server" value={value} onChangeText={setValue} keyboardType="url" placeholder="secures.startappitalia.it" onSubmitEditing={submit} />
       {error && <Notice kind="error">{error}</Notice>}
       <Button title={busy ? "Verifica…" : "Continua"} onPress={submit} busy={busy} disabled={!value.trim()} />
-      <Text style={{ color: color.muted, fontSize: 13 }}>Con un collegamento d'invito crei l'account direttamente qui; se l'account esiste già, accedi con le stesse credenziali dell'estensione.</Text>
+      <Text style={{ color: color.muted, fontSize: 13 }}>L'account si crea dall'estensione per Chrome o Edge: sul telefono si accede con le stesse credenziali.</Text>
     </Frame>
   );
 }

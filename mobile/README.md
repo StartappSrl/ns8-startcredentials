@@ -16,9 +16,6 @@ operazioni e riceve i risultati.
 
 ## Funzioni
 
-Permessi Android: rete, impronta, vibrazione e fotocamera (solo per i QR code
-OTP); nessun accesso a microfono, archivio o sovrapposizione ad altre app.
-
 Accesso (OPAQUE), codice MFA o di riserva, prima configurazione dell'MFA,
 dispositivo attendibile per 30 giorni, sblocco con l'impronta (sessione
 nell'Android Keystore, leggibile solo dopo l'autenticazione biometrica),
@@ -33,53 +30,9 @@ con l'impronta e mostra, in sola lettura, i dati dell'ultima sincronizzazione.
 Uscendo dall'account, o disattivando l'opzione, i dati offline vengono
 cancellati.
 
-**Primo accesso**: incollando il collegamento d'invito si crea l'account
-direttamente dal telefono (master password, MFA, codici di riserva).
-
-**Modifiche**: nuove password e note, modifica, eliminazione e cestino con
-ripristino, cronologia delle versioni con ritorno a una versione precedente,
-allegati caricati dal telefono (fino a 25 MB) ed eliminati, nuove cartelle e
-sottocartelle, generatore di password. Il **codice OTP** si
-aggancia a una password esistente scansionando il QR code del servizio o
-incollando la chiave segreta o il link `otpauth://`; prima di salvare compare
-il codice per il confronto. Senza rete le modifiche sono disattivate.
-**Condivisioni**: per i gestori, condivisione del cliente con colleghi e gruppi
-(con revoca e rotazione della chiave) e di una singola password (con revoca e
-ricifratura). Le chiavi dei colleghi si certificano dall'estensione.
-
-**Account**: cambio della master password, nuovi codici di riserva, rapporto
-sulla salute delle password.
-
-**Aggiornamenti**: ogni 30 secondi, con l'app attiva e la rete, l'app rileva i
-cambiamenti dei colleghi e aggiorna le schermate e la copia offline. Se la
-sessione scade sul server si torna alla schermata di sblocco.
-
-**Aspetto**: tema chiaro o scuro secondo il sistema (all'avvio), contenuto
-centrato sui tablet.
-
-Restano solo nell'estensione l'amministrazione (utenti, certificazioni,
-uscite, recupero, gruppi, registro attività) e import/export: operazioni rare,
-più sicure e comode su un computer.
-
-**Autofill di sistema**: StartCredentials può essere scelto come servizio di
-compilazione automatica di Android (Impostazioni dell'app → «Compilazione
-automatica»). Nelle app e nei siti compare «Compila con StartCredentials»: al
-tocco si apre una schermata che sblocca la cassaforte (impronta o master
-password, anche offline), mostra le credenziali del dominio esatto o dell'app
-e compila utente, password e codice OTP. Il servizio di sistema non riceve mai
-password: le consegna ad Android solo la schermata, al momento della scelta.
-A fine accesso Android propone «Salvare in StartCredentials?»: la schermata
-salva il nuovo accesso o aggiorna la password cambiata. Negli accessi in due
-passaggi (utente e password su pagine diverse) i valori appena scelti restano
-in memoria per 60 secondi, solo per lo stesso sito o la stessa app.
-Scegliendo a mano una credenziale per un'app, la si può associare
-(`androidapp://pacchetto`) così la volta dopo compare subito. In Chrome va
-attivato anche «Compila automaticamente utilizzando un altro servizio».
-
-Codice nativo: `modules/sc-autofill` (servizio, analisi dei campi, consegna
-dei valori; verificato con il compilatore Kotlin sulle API di Android 15) e
-`plugins/autofill` (aggiunge l'attività della schermata durante la generazione
-del progetto Android).
+Le modifiche (nuove password, condivisioni, amministrazione) si fanno
+dall'estensione. L'autofill di sistema di Android è previsto in una versione
+successiva.
 
 ## Preparazione
 
@@ -97,15 +50,7 @@ Ricordarsi di rigenerare il motore ogni volta che cambiano `packages/`.
 
 ## Compilare l'APK
 
-**Con GitHub Actions (consigliato, nessuna installazione):** nella scheda
-Actions del repository scegliere «App Android (APK)» → «Run workflow»; dopo
-circa 20 minuti l'APK è tra gli artefatti dell'esecuzione. In alternativa si
-crea un tag `app-X.Y.Z`. Per la firma aziendale aggiungere nei segreti del
-repository `ANDROID_KEYSTORE_BASE64`, `ANDROID_KEYSTORE_PASSWORD`,
-`ANDROID_KEY_ALIAS`, `ANDROID_KEY_PASSWORD`; senza segreti l'APK usa la chiave
-di prova di React Native, adatta solo ai test.
-
-**Con EAS (cloud di Expo):** serve un account Expo gratuito.
+**Con EAS (cloud di Expo, consigliato):** serve un account Expo gratuito.
 
 ```bash
 cd mobile

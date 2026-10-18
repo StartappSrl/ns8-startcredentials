@@ -7,8 +7,6 @@ import { AppProvider, Route, useApp } from "./src/state/App";
 import { LoginScreen, MfaScreen, MfaSetupScreen, SetupScreen } from "./src/screens/Auth";
 import { ClientsScreen, ContainerScreen, ItemScreen, SearchScreen, SharedScreen } from "./src/screens/Vault";
 import { SettingsScreen } from "./src/screens/Settings";
-import { EditScreen } from "./src/screens/Edit";
-import { BackupCodesScreen, ChangePasswordScreen, HealthScreen, HistoryScreen, ItemShareScreen, RegisterScreen, ShareScreen } from "./src/screens/More";
 import { color } from "./src/theme";
 
 const TABS: { route: Route; label: string }[] = [
@@ -25,7 +23,6 @@ function Main() {
   usePreventScreenCapture();
   if (app.phase === "boot") return <View style={{ flex: 1, backgroundColor: color.ground }} />;
   if (app.phase === "setup") return <SetupScreen />;
-  if (app.phase === "register") return <RegisterScreen />;
   if (app.phase === "login") return <LoginScreen />;
   if (app.phase === "mfa") return <MfaScreen />;
   if (app.phase === "mfaSetup") return <MfaSetupScreen />;
@@ -35,17 +32,9 @@ function Main() {
     r.name === "search" ? <SearchScreen /> :
     r.name === "shared" ? <SharedScreen /> :
     r.name === "settings" ? <SettingsScreen /> :
-    r.name === "container" ? <ContainerScreen key={r.id} id={r.id} title={r.title} canWrite={r.canWrite} canManage={r.canManage} /> :
-    r.name === "edit" ? <EditScreen key={r.item?.id ?? "new"} containerId={r.containerId} containerTitle={r.containerTitle} item={r.item} /> :
-    r.name === "history" ? <HistoryScreen item={r.item} where={r.where} /> :
-    r.name === "share" ? <ShareScreen containerId={r.containerId} title={r.title} /> :
-    r.name === "itemShare" ? <ItemShareScreen item={r.item} /> :
-    r.name === "health" ? <HealthScreen /> :
-    r.name === "changePassword" ? <ChangePasswordScreen /> :
-    r.name === "backupCodes" ? <BackupCodesScreen /> :
-    <ItemScreen key={r.item.id} item={r.item} whereName={r.where} canWrite={r.canWrite} canManage={!!r.canManage} />;
-  const active = ["clients", "container", "item", "edit", "history", "share", "itemShare"].includes(r.name) ? "clients"
-    : ["health", "changePassword", "backupCodes"].includes(r.name) ? "settings" : r.name;
+    r.name === "container" ? <ContainerScreen key={r.id} id={r.id} title={r.title} /> :
+    <ItemScreen key={r.item.id} item={r.item} whereName={r.where} />;
+  const active = ["clients", "container", "item"].includes(r.name) ? "clients" : r.name;
   return (
     <View style={{ flex: 1, backgroundColor: color.ground }}>
       {engine.offline && (
@@ -55,7 +44,7 @@ function Main() {
           </Text>
         </View>
       )}
-      <View style={{ flex: 1, width: "100%", maxWidth: 760, alignSelf: "center" }}>{screen}</View>
+      <View style={{ flex: 1 }}>{screen}</View>
       <View style={{ flexDirection: "row", borderTopWidth: 1, borderTopColor: color.line, backgroundColor: color.surface }} accessibilityRole="tablist">
         {TABS.map((t) => {
           const on = active === t.route.name;
@@ -80,7 +69,7 @@ export default function App() {
             <Main />
           </AppProvider>
         </EngineProvider>
-        <StatusBar style="auto" />
+        <StatusBar style="dark" />
       </SafeAreaView>
     </SafeAreaProvider>
   );

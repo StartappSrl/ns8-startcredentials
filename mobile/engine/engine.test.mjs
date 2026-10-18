@@ -104,9 +104,6 @@ const call = (method, ...args) => new Promise((resolve, reject) => {
   w.__scEngine.receive(JSON.stringify({ type: "call", id, method, args }));
 });
 const step = (s) => console.log(`✓ ${s}`);
-async function login(url, email, password) {
-  return sdk.login(new sdk.Api({ baseUrl: url }), email, password);
-}
 
 try {
   await readyP;
@@ -149,111 +146,8 @@ try {
   await assert.rejects(call("unlock", "password sbagliata"), (e) => e.code === "security");
   assert.ok(fetches > 10, "tutte le richieste passano dall'app");
 
-  // ---------------------------------------------------------------- modifiche dal telefono
-  await call("unlock", "password di marco");
-  const fid = await call("createFolder", c.id, "Rete", null);
-  const pw = await call("generatePassword", 24, true);
-  assert.equal(pw.length, 24);
-  const nid = await call("createItem", c.id, { type: "login", name: "Switch", username: "admin", password: pw, urls: ["https://switch.mobile.it"],
-    fields: [{ label: "TimeOtp-Secret-Base32", value: "VECCHIOSEGRETOIMPORTATO", secret: true }] }, fid);
-  let mine = (await call("items", c.id)).find((i) => i.id === nid);
-  assert.equal(mine.folderId, fid);
-  // Aggancio dell'OTP a una password esistente: chiave Base32 (con spazi, come la mostrano i servizi).
-  const parsed = await call("parseTotp", "gezd gnbv gy3t qojq gezd gnbv gy3t qojq", "Switch");
-  assert.match(parsed.uri, /^otpauth:\/\/totp\/Switch\?secret=GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ$/);
-  assert.match(parsed.code, /^\d{6}$/);
-  await call("updateItem", nid, { ...mine.data, totpUri: parsed.uri });
-  mine = (await call("items", c.id)).find((i) => i.id === nid);
-  assert.equal(mine.data.totpUri, parsed.uri);
-  assert.ok(!(mine.data.fields ?? []).some((f) => f.label.startsWith("TimeOtp")), "i vecchi campi OTP importati vengono tolti");
-  assert.equal((await call("totp", await call("effectiveTotp", nid))).code, parsed.code);
-  // Link otpauth (da QR code) con parametri.
-  const fromQr = await call("parseTotp", "otpauth://totp/Fortinet:admin?secret=GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ&digits=8&algorithm=SHA256", "x");
-  assert.match(fromQr.code, /^\d{8}$/);
-  await assert.rejects(call("parseTotp", "non è una chiave", "x"), /Chiave non valida/);
-  await call("updateItem", nid, { ...mine.data, password: "nuova!" }, null);
-  mine = (await call("items", c.id)).find((i) => i.id === nid);
-  assert.equal(mine.data.password, "nuova!");
-  assert.equal(mine.folderId, null);
-  await call("deleteItem", nid);
-  assert.ok(!(await call("items", c.id)).some((i) => i.id === nid));
-  step("modifiche dal telefono: cartella, nuova password, OTP agganciato (chiave o QR), modifica, eliminazione");
-
-  // Autofill: dominio esatto, app associata, ricerca libera.
-  const web = await call("lookup", "https://router.mobile.it/login");
-  assert.equal(web.length, 1);
-  assert.equal(web[0].item.data.username, "admin");
-  assert.equal((await call("lookup", "https://router.mobile.it.evil.com/")).length, 0, "nessun dominio simile");
-  assert.equal((await call("lookupApp", "com.fortinet.forticlient")).length, 0);
-  const router = web[0].item;
-  await call("updateItem", router.id, { ...router.data, urls: [...router.data.urls, "androidapp://com.fortinet.forticlient"] });
-  const app = await call("lookupApp", "com.fortinet.forticlient");
-  assert.equal(app.length, 1);
-  assert.equal(app[0].canWrite, true);
-  assert.ok((await call("allItems")).some((r) => r.item.data.name === "Router"));
-  step("autofill: credenziali per dominio esatto (niente domini simili), per app associata, ricerca libera");
-
-  // Cestino e cronologia.
-  const tid = await call("createItem", c.id, { type: "login", name: "Temporanea", password: "v1" }, null);
-  let tmp = (await call("items", c.id)).find((i) => i.id === tid);
-  await call("updateItem", tid, { ...tmp.data, password: "v2" });
-  await call("items", c.id);
-  const versions = await call("itemVersions", tid);
-  assert.equal(versions[0].data.password, "v1");
-  await call("restoreVersion", tid, versions[0].revision);
-  assert.equal((await call("items", c.id)).find((i) => i.id === tid).data.password, "v1");
-  await call("deleteItem", tid);
-  assert.ok((await call("items", c.id, true)).some((i) => i.id === tid), "nel cestino");
-  await call("restoreItem", tid);
-  assert.ok((await call("items", c.id)).some((i) => i.id === tid), "ripristinata");
-  // Allegato caricato dal telefono.
-  const up = new Uint8Array(50_000).map((_, i) => (i * 11) % 256);
-  await call("addAttachment", tid, Buffer.from(up).toString("base64"), "foto.jpg", "image/jpeg");
-  tmp = (await call("items", c.id)).find((i) => i.id === tid);
-  const back = await call("downloadAttachment", tid, tmp.attachments[0].id);
-  assert.deepEqual(new Uint8Array(Buffer.from(back.data, "base64")), up);
-  await call("deleteAttachment", tmp.attachments[0].id);
-  assert.equal((await call("items", c.id)).find((i) => i.id === tid).attachments.length, 0);
-  step("dal telefono: cestino e ripristino, cronologia e ritorno a una versione, allegato caricato e tolto");
-
-  // Condivisioni con un collega certificato.
-  const inv = await v.invite("laura@azienda.it", "Laura", "user");
-  const la = new sdk.Api({ baseUrl: serverUrl });
-  const reg = await sdk.register(la, { token: inv.inviteToken, password: "password di laura", kdf: FAST });
-  const lmfa = await sdk.setupMfa(la);
-  await sdk.enableMfa(la, totp(lmfa.secret));
-  const laura = await sdk.Vault.unlock(la, "password di laura");
-  await v.certifyUser(reg.userId, laura.myFingerprint);
-  const dir = await call("directory");
-  assert.ok(dir.find((u) => u.id === reg.userId).verified);
-  await call("share", c.id, reg.userId, "read");
-  assert.ok((await call("members", c.id)).some((m) => m.userId === reg.userId && m.permission === "read"));
-  assert.ok((await laura.containers()).some((x) => x.id === c.id));
-  await call("revoke", c.id, reg.userId);
-  assert.ok(!(await laura.containers()).some((x) => x.id === c.id));
-  await call("items", c.id);
-  await call("shareItem", tid, reg.userId);
-  assert.ok((await laura.sharedWithMe()).some((i) => i.id === tid));
-  assert.equal((await call("itemShares", tid)).length, 1);
-  await call("unshareItem", tid, reg.userId);
-  assert.ok(!(await laura.sharedWithMe()).some((i) => i.id === tid));
-  step("condivisioni dal telefono: cliente con un collega e revoca, singola password e revoca con ricifratura");
-
-  // Account e salute delle password (l'invito prima: il cambio di password chiude le altre sessioni).
-  globalThis.__newInvite = await v.invite("paolo@azienda.it", "Paolo", "user");
-  const h = await call("health");
-  assert.ok(h.checked >= 1 && Array.isArray(h.reused));
-  assert.equal((await call("mfaStatus")).backupCodesRemaining, 10);
-  await resetCounter();
-  const codes = await call("regenerateBackupCodes", totp(mfa.secret));
-  assert.equal(codes.length, 10);
-  await call("changePassword", "password di marco", "nuova password di marco", codes[0]);
-  await assert.rejects(login(serverUrl, "marco@azienda.it", "password di marco"), /invalid_credentials|credenziali/i);
-  step("account dal telefono: salute delle password, nuovi codici di riserva, cambio della master password");
-
-
   // ---------------------------------------------------------------- offline
-  await call("unlock", "nuova password di marco");
+  await call("unlock", "password di marco");
   const sync = await call("syncAll");
   assert.ok(sync.items >= 1);
   assert.ok([...offlineCache.keys()].every((k) => !k.includes("/auth/")), "mai dati di autenticazione nell'archivio");
@@ -262,34 +156,22 @@ try {
   network = false;
   await call("lock");
   await call("setToken", null);
-  await assert.rejects(call("login", "marco@azienda.it", "nuova password di marco"), (e) => !e.code && /Rete/.test(e.message));
-  const off = await call("unlock", "nuova password di marco");
+  await assert.rejects(call("login", "marco@azienda.it", "password di marco"), (e) => !e.code && /Rete/.test(e.message));
+  const off = await call("unlock", "password di marco");
   assert.equal(off.me.email, "marco@azienda.it");
   const offC = (await call("containers")).find((x) => x.meta.name === "Cliente Mobile");
-  const offRouter = (await call("items", offC.id)).find((i) => i.data.name === "Router");
-  assert.equal(offRouter.data.password, "r0uter!");
-  assert.match((await call("totp", await call("effectiveTotp", offRouter.id))).code, /^\d{6}$/);
-  const offFile = await call("downloadAttachment", offRouter.id, offRouter.attachments[0].id);
+  const offItems = await call("items", offC.id);
+  assert.equal(offItems[0].data.password, "r0uter!");
+  assert.match((await call("totp", await call("effectiveTotp", offItems[0].id))).code, /^\d{6}$/);
+  const offFile = await call("downloadAttachment", offItems[0].id, offItems[0].attachments[0].id);
   assert.deepEqual(new Uint8Array(Buffer.from(offFile.data, "base64")), pdf);
   await assert.rejects(call("unlock", "password sbagliata"), (e) => e.code === "security");
-  await assert.rejects(call("createItem", offC.id, { type: "note", name: "offline" }, null), /Rete/);
-  step("senza rete: sblocco con la master password, password, OTP e allegato dai dati salvati; modifiche rifiutate");
+  step("senza rete: sblocco con la master password, password, OTP e allegato dai dati salvati");
   await call("lock");
   await call("restore", sessionForBio);
-  assert.equal((await call("items", offC.id)).find((i) => i.data.name === "Router").data.username, "admin");
+  assert.equal((await call("items", offC.id))[0].data.username, "admin");
   step("senza rete: ripresa della sessione (sblocco con l'impronta)");
   network = true;
-  // Registrazione da invito direttamente dal telefono.
-  await call("lock");
-  await call("setToken", null);
-  const r2 = await call("register", globalThis.__newInvite.inviteToken, "password di paolo");
-  assert.equal(r2.state, "mfa_setup");
-  const ps = await call("setupMfa");
-  const pcodes = await call("enableMfa", totp(ps.secret));
-  assert.equal(pcodes.length, 10);
-  const pu = await call("unlock", "password di paolo");
-  assert.equal(pu.me.email, "paolo@azienda.it");
-  step("primo accesso da invito sul telefono: registrazione, MFA, sblocco");
   step("solo i metodi previsti; master password errata respinta; rete solo tramite l'app");
   console.log("\nTest del motore Android superato.");
 } catch (e) {
