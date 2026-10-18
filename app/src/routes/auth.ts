@@ -183,7 +183,7 @@ export async function authRoutes(app: FastifyInstance, ctx: Ctx) {
   });
 
   app.post("/api/v1/auth/login/finish", async (req) => {
-    const body = z.object({ loginId: z.string().max(100), finishLoginRequest: b64, deviceToken: z.string().max(200).optional() }).parse(req.body);
+    const body = z.object({ loginId: z.string().max(100), finishLoginRequest: b64, deviceToken: z.string().max(200).nullish() }).parse(req.body);
     limit(req);
     const pending = ctx.pendingLogins.get(body.loginId);
     ctx.pendingLogins.delete(body.loginId);

@@ -10,6 +10,9 @@ import { WebView, WebViewMessageEvent } from "react-native-webview";
 import { ENGINE_HTML } from "./engineHtml";
 import { getCached, isCacheable, lastSynced, markSynced, putCached, wipeOffline } from "./offlineCache";
 
+/** Segnaposto per un argomento non specificato (ricostruito come undefined dal motore). */
+export const UNDEFINED = "\u0000sc:undefined";
+
 export class EngineError extends Error {
   constructor(message: string, public code?: string, public status?: number) {
     super(message);
@@ -139,7 +142,8 @@ export function EngineProvider({ children }: { children: ReactNode }) {
         reject(new EngineError("Il motore non risponde"));
       }, 120_000);
       pending.current.set(id, { resolve: resolve as (v: unknown) => void, reject, timer });
-      send({ type: "call", id, method, args });
+      // JSON trasforma undefined in null: lo marchiamo perché il motore lo ricostruisca.
+      send({ type: "call", id, method, args: args.map((a) => (a === undefined ? UNDEFINED : a)) });
     });
   }, [ready]);
 

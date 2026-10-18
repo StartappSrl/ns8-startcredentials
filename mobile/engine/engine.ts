@@ -23,6 +23,8 @@ declare global {
 }
 
 const post = (m: unknown) => window.ReactNativeWebView?.postMessage(JSON.stringify(m));
+/** Deve coincidere con UNDEFINED in src/engine/Engine.tsx. */
+const UNDEFINED = "\u0000sc:undefined";
 
 // ------------------------------------------------------------------ base64
 
@@ -90,7 +92,7 @@ const methods: Record<string, (...args: never[]) => unknown> = {
   status: async () => serverStatus(needApi()),
   setToken(token: string | null) { needApi().token = token ?? undefined; return true; },
   async login(email: string, password: string, deviceToken?: string) {
-    const r = await login(needApi(), email, password, { deviceToken });
+    const r = await login(needApi(), email, password, { deviceToken: deviceToken || undefined });
     return { state: r.state, trustedDevice: !!r.trustedDevice, token: r.token };
   },
   session: async () => needApi().get<{ state: string }>("/auth/session"),
@@ -301,7 +303,9 @@ async function handle(m: Extract<Msg, { type: "call" }>) {
   const fn = methods[m.method];
   try {
     if (!fn) throw new Error(`Metodo sconosciuto: ${m.method}`);
-    const value = await (fn as (...a: unknown[]) => unknown)(...(m.args ?? []));
+    // Argomenti non specificati: l'app li marca perché JSON li renderebbe null.
+    const args = (m.args ?? []).map((a) => (a === UNDEFINED ? undefined : a));
+    const value = await (fn as (...a: unknown[]) => unknown)(...args);
     post({ type: "result", id: m.id, ok: true, value });
   } catch (e) {
     const err = e as Error & { code?: string; status?: number };

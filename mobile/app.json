@@ -2,7 +2,7 @@
   "expo": {
     "name": "StartCredentials",
     "slug": "startcredentials",
-    "version": "0.8.0",
+    "version": "0.8.1",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "automatic",
@@ -11,7 +11,7 @@
     },
     "android": {
       "package": "it.startapp.credentials",
-      "versionCode": 3,
+      "versionCode": 4,
       "allowBackup": false,
       "adaptiveIcon": {
         "backgroundColor": "#0068CF",

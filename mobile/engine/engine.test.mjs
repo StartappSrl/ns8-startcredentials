@@ -101,7 +101,8 @@ function onEngine(m) {
 const call = (method, ...args) => new Promise((resolve, reject) => {
   const id = ++seq;
   pending.set(id, (m) => (m.ok ? resolve(m.value) : reject(Object.assign(new Error(m.error.message), m.error))));
-  w.__scEngine.receive(JSON.stringify({ type: "call", id, method, args }));
+  // Come l'app (src/engine/Engine.tsx): gli argomenti non specificati sono marcati.
+  w.__scEngine.receive(JSON.stringify({ type: "call", id, method, args: args.map((x) => (x === undefined ? "\u0000sc:undefined" : x)) }));
 });
 const step = (s) => console.log(`✓ ${s}`);
 async function login(url, email, password) {
@@ -112,7 +113,8 @@ try {
   await readyP;
   step("motore avviato nella WebView");
   await call("init", serverUrl);
-  const l = await call("login", "marco@azienda.it", "password di marco");
+  // Come fa l'app su un telefono non ancora attendibile: token esplicitamente assente.
+  const l = await call("login", "marco@azienda.it", "password di marco", undefined);
   assert.equal(l.state, "mfa_pending");
   await resetCounter();
   await call("verifyMfa", totp(mfa.secret));
@@ -186,7 +188,10 @@ try {
   assert.equal((await call("lookup", "https://router.mobile.it.evil.com/")).length, 0, "nessun dominio simile");
   assert.equal((await call("lookupApp", "com.fortinet.forticlient")).length, 0);
   const router = web[0].item;
-  await call("updateItem", router.id, { ...router.data, urls: [...router.data.urls, "androidapp://com.fortinet.forticlient"] });
+  const routerFolder = (await call("items", c.id)).find((i) => i.id === router.id).folderId;
+  // Come fa l'autofill: cartella non specificata, l'elemento deve restare dov'è.
+  await call("updateItem", router.id, { ...router.data, urls: [...router.data.urls, "androidapp://com.fortinet.forticlient"] }, undefined);
+  assert.equal((await call("items", c.id)).find((i) => i.id === router.id).folderId, routerFolder, "la cartella non cambia");
   const app = await call("lookupApp", "com.fortinet.forticlient");
   assert.equal(app.length, 1);
   assert.equal(app[0].canWrite, true);
