@@ -5,6 +5,7 @@ import { api, clearPendingSave, currentVault, getPendingSave, getSettings, hasTo
 import { fillTab } from "./fill";
 import { Brand, CopyButton, ErrorNote, OtpCode, ToastHost, useAction, useLoad, useToast } from "./ui/kit";
 import { unlockWith } from "./ui/auth";
+import { openSite, siteUrl } from "./ui/vault";
 
 const openApp = (hash = "") => chrome.tabs.create({ url: chrome.runtime.getURL(`app.html${hash}`) }).then(() => window.close());
 
@@ -111,7 +112,9 @@ function Unlocked({ vault }: { vault: Vault }) {
 
   const fill = (hit: Hit) => run(async () => {
     if (!tab?.id || !host) throw new Error("Nessuna pagina da compilare");
-    await fillTab(tab.id, host, hit.item.data.username, hit.item.data.password);
+    const uri = effectiveTotpUri(hit.item.data);
+    const otp = uri ? (await Vault.totp(uri)).code : undefined;
+    await fillTab(tab.id, host, hit.item.data.username, hit.item.data.password, otp);
     vault.report("item.fill", hit.container.id, hit.item.id);
     window.close();
   });
@@ -145,6 +148,9 @@ function Unlocked({ vault }: { vault: Vault }) {
               <div>
                 <div style="font-weight:500" class="ellipsis">{d.name}</div>
                 <div class="small muted ellipsis">{hit.container.kind === "personal" ? "Area personale" : hit.container.meta.name}{d.username ? ` · ${d.username}` : ""}</div>
+                {d.urls?.[0] && (
+                  <a class="small ellipsis" style="display:block" href={siteUrl(d.urls[0])} onClick={(e) => { e.preventDefault(); openSite(d.urls![0]!); window.close(); }}>{d.urls[0]}</a>
+                )}
               </div>
               {effectiveTotpUri(d) && <OtpCode uri={effectiveTotpUri(d)!} compact onCopy={() => vault.report("item.totp_copy", hit.container.id, hit.item.id)} />}
               <div class="row" style="gap:6px">

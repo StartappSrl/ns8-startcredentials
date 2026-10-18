@@ -11,7 +11,7 @@ rmSync(out, { recursive: true, force: true });
 mkdirSync(join(out, "fonts"), { recursive: true });
 
 await build({
-  entryPoints: { background: "src/background.ts", popup: "src/popup.tsx", app: "src/app.tsx", offscreen: "src/offscreen.ts" },
+  entryPoints: { background: "src/background.ts", popup: "src/popup.tsx", app: "src/app.tsx", offscreen: "src/offscreen.ts", "inline-menu": "src/inline-menu.tsx" },
   outdir: out,
   bundle: true,
   format: "esm",

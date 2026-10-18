@@ -295,7 +295,12 @@ export async function importKeePass(data: ArrayBuffer, password: string, keyFile
         }),
       });
     }
-    for (const g of group.groups) walk(g, [...path, g.name ?? "Gruppo"]);
+    // Alcuni export (es. Passbolt) mettono i gruppi tutti al primo livello con il percorso
+    // nel nome ("Rossi/Server"): lo trattiamo come un percorso.
+    for (const g of group.groups) {
+      const parts = (g.name ?? "Gruppo").split("/").map((x) => x.trim()).filter(Boolean);
+      walk(g, [...path, ...(parts.length ? parts : ["Gruppo"])]);
+    }
   };
   const root = db.getDefaultGroup();
   walk(root, []);
@@ -376,8 +381,28 @@ export function dropTopLevel(r: ImportResult): ImportResult {
   };
 }
 
-export function planClientImport(input: ImportResult, containers: Container[], opts: { level?: 1 | 2; canCreate?: boolean } = {}): ClientImportPlan {
-  const r = opts.level === 2 ? dropTopLevel(input) : input;
+/**
+ * Riassegnazioni scelte nell'anteprima: una cartella principale diventa
+ * sottocartella di un'altra (chiavi: nomi normalizzati). Serve per gli export
+ * in cui la gerarchia non è scritta nel file.
+ */
+export function applyAttach(r: ImportResult, attach: Record<string, string> = {}): ImportResult {
+  const tops = r.folders.filter((f) => !f.parentKey);
+  const byName = new Map<string, ImportedFolder>();
+  for (const t of tops) if (!byName.has(norm(t.name))) byName.set(norm(t.name), t);
+  const folders = r.folders.map((f) => {
+    if (f.parentKey) return f;
+    const target = attach[norm(f.name)];
+    // Solo verso una cartella che resta cliente (niente catene o cicli).
+    if (!target || target === norm(f.name) || attach[target]) return f;
+    const parent = byName.get(target);
+    return parent && parent.key !== f.key ? { ...f, parentKey: parent.key } : f;
+  });
+  return { ...r, folders };
+}
+
+export function planClientImport(input: ImportResult, containers: Container[], opts: { level?: 1 | 2; canCreate?: boolean; attach?: Record<string, string> } = {}): ClientImportPlan {
+  const r = applyAttach(opts.level === 2 ? dropTopLevel(input) : input, opts.attach);
   const canCreate = opts.canCreate ?? true;
   const byKey = new Map(r.folders.map((f) => [f.key, f]));
   const topOf = (key: string): ImportedFolder => {
@@ -422,9 +447,9 @@ export interface ClientImportSummary {
 
 /** Esegue il piano: crea i clienti mancanti e importa in ciascuno le sue credenziali. */
 export async function importAsClients(
-  vault: Vault, input: ImportResult, opts: { looseContainerId?: string | null; onProgress?: (text: string) => void; level?: 1 | 2 } = {},
+  vault: Vault, input: ImportResult, opts: { looseContainerId?: string | null; onProgress?: (text: string) => void; level?: 1 | 2; attach?: Record<string, string> } = {},
 ): Promise<ClientImportSummary> {
-  const r = opts.level === 2 ? dropTopLevel(input) : input;
+  const r = applyAttach(opts.level === 2 ? dropTopLevel(input) : input, opts.attach);
   const plan = planClientImport(r, await vault.containers(), { canCreate: vault.me.role === "admin" });
   const out: ClientImportSummary = { created: [], reused: [], imported: 0, loose: 0, duplicates: 0, skipped: [] };
   const sig = (d: ItemData) => JSON.stringify([norm(d.name), d.username ?? "", d.password ?? "", d.totpUri ?? ""]);

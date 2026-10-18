@@ -1,7 +1,10 @@
 /**
- * TOTP (RFC 6238) calcolato solo sul client. HMAC via Web Crypto,
- * disponibile in browser, estensioni, Node.js e React Native (con polyfill).
+ * TOTP (RFC 6238) calcolato solo sul client. HMAC con @noble/hashes (librerie
+ * verificate da audit), identico in browser, estensione, Node.js e React Native.
  */
+import { hmac } from "@noble/hashes/hmac";
+import { sha1 } from "@noble/hashes/legacy";
+import { sha256, sha512 } from "@noble/hashes/sha2";
 import { CryptoError } from "./sodium.js";
 
 export type TotpAlgorithm = "SHA-1" | "SHA-256" | "SHA-512";
@@ -71,8 +74,8 @@ export async function generateTotp(p: Pick<TotpParams, "secret" | "algorithm" | 
   const counter = Math.floor(timeMs / 1000 / p.period);
   const msg = new Uint8Array(8);
   new DataView(msg.buffer).setBigUint64(0, BigInt(counter));
-  const key = await globalThis.crypto.subtle.importKey("raw", p.secret, { name: "HMAC", hash: p.algorithm }, false, ["sign"]);
-  const mac = new Uint8Array(await globalThis.crypto.subtle.sign("HMAC", key, msg));
+  const hash = p.algorithm === "SHA-256" ? sha256 : p.algorithm === "SHA-512" ? sha512 : sha1;
+  const mac = hmac(hash, p.secret, msg);
   const offset = mac[mac.length - 1]! & 0x0f;
   const bin = ((mac[offset]! & 0x7f) << 24) | (mac[offset + 1]! << 16) | (mac[offset + 2]! << 8) | mac[offset + 3]!;
   const code = String(bin % 10 ** p.digits).padStart(p.digits, "0");

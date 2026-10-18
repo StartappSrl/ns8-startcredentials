@@ -5,7 +5,7 @@
  */
 import { normalizeHost } from "@startcredentials/client";
 
-export async function fillTab(tabId: number, expectedHost: string, username: string | undefined, password: string | undefined): Promise<void> {
+export async function fillTab(tabId: number, expectedHost: string, username: string | undefined, password: string | undefined, otp?: string): Promise<void> {
   const tab = await chrome.tabs.get(tabId);
   if (!tab.url) throw new Error("Impossibile leggere l'indirizzo della scheda");
   const url = new URL(tab.url);
@@ -14,13 +14,13 @@ export async function fillTab(tabId: number, expectedHost: string, username: str
   const [res] = await chrome.scripting.executeScript({
     target: { tabId, frameIds: [0] },
     func: injectedFill,
-    args: [normalizeHost(expectedHost), username ?? "", password ?? ""],
+    args: [normalizeHost(expectedHost), username ?? "", password ?? "", otp ?? ""],
   });
   if (!res?.result) throw new Error("Nessun campo di accesso trovato nella pagina");
 }
 
 // Gira nella pagina: nessun riferimento a variabili esterne.
-function injectedFill(host: string, username: string, password: string): boolean {
+function injectedFill(host: string, username: string, password: string, otp: string): boolean {
   if (location.hostname.toLowerCase().replace(/\.$/, "") !== host) return false;
   const visible = (el: HTMLElement) => {
     const r = el.getBoundingClientRect();
@@ -44,5 +44,12 @@ function injectedFill(host: string, username: string, password: string): boolean
   let done = false;
   if (user && username) { set(user, username); done = true; }
   if (pwd && password) { set(pwd, password); pwd.focus(); done = true; }
+  // Campo del codice OTP (stessa pagina o pagina successiva del login).
+  if (otp) {
+    const otpField = inputs.find((i) => i !== user && i !== pwd && ["text", "tel", "number", ""].includes(i.type) && (
+      i.autocomplete === "one-time-code" ||
+      /otp|totp|2fa|mfa|one.?time|codice|verification|verifica|auth.?code|token/i.test(`${i.name} ${i.id} ${i.placeholder} ${i.getAttribute("aria-label") ?? ""}`)));
+    if (otpField) { set(otpField, otp); if (!pwd) otpField.focus(); done = true; }
+  }
   return done;
 }

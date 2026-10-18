@@ -1,0 +1,58 @@
+{
+  "expo": {
+    "name": "StartCredentials",
+    "slug": "startcredentials",
+    "version": "0.8.0",
+    "orientation": "portrait",
+    "icon": "./assets/icon.png",
+    "userInterfaceStyle": "automatic",
+    "ios": {
+      "supportsTablet": true
+    },
+    "android": {
+      "package": "it.startapp.credentials",
+      "versionCode": 3,
+      "allowBackup": false,
+      "adaptiveIcon": {
+        "backgroundColor": "#0068CF",
+        "foregroundImage": "./assets/android-icon-foreground.png",
+        "backgroundImage": "./assets/android-icon-background.png",
+        "monochromeImage": "./assets/android-icon-monochrome.png"
+      },
+      "predictiveBackGestureEnabled": false,
+      "blockedPermissions": [
+        "android.permission.RECORD_AUDIO",
+        "android.permission.READ_EXTERNAL_STORAGE",
+        "android.permission.WRITE_EXTERNAL_STORAGE",
+        "android.permission.SYSTEM_ALERT_WINDOW"
+      ]
+    },
+    "plugins": [
+      "expo-secure-store",
+      "expo-sharing",
+      [
+        "expo-local-authentication",
+        {
+          "faceIDPermission": "StartCredentials usa Face ID per sbloccare la cassaforte."
+        }
+      ],
+      [
+        "expo-splash-screen",
+        {
+          "image": "./assets/splash-icon.png",
+          "imageWidth": 220,
+          "backgroundColor": "#FFFFFF"
+        }
+      ],
+      [
+        "expo-camera",
+        {
+          "cameraPermission": "StartCredentials usa la fotocamera solo per leggere i QR code dei codici OTP.",
+          "recordAudioAndroid": false
+        }
+      ],
+      "./plugins/autofill"
+    ],
+    "scheme": "startcredentials"
+  }
+}

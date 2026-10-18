@@ -73,6 +73,7 @@ export async function userRoutes(app: FastifyInstance, ctx: Ctx) {
         [a.id, u.rows[0].key_version, body.privateEnc, body.kdfParams]);
       await c.query("UPDATE users SET opaque_record = $2 WHERE id = $1", [a.id, body.registrationRecord]);
       const r = await c.query("DELETE FROM sessions WHERE user_id = $1 AND id <> $2", [a.id, a.sessionId]);
+      await c.query("UPDATE trusted_devices SET revoked_at = now() WHERE user_id = $1 AND revoked_at IS NULL", [a.id]);
       await audit(c, { actorId: a.id, action: "user.password_changed", targetType: "user", targetId: a.id, ip: req.ip, details: { sessionsClosed: r.rowCount } });
       return { ok: true, sessionsClosed: r.rowCount };
     });
@@ -209,6 +210,7 @@ export async function userRoutes(app: FastifyInstance, ctx: Ctx) {
         "UPDATE users SET mfa_enabled = false, mfa_secret_enc = NULL, mfa_backup_codes = NULL, mfa_last_counter = 0 WHERE id = $1 AND status = 'active' RETURNING id", [id]);
       if (!r.rows[0]) throw notFound();
       await c.query("DELETE FROM sessions WHERE user_id = $1", [id]);
+      await c.query("UPDATE trusted_devices SET revoked_at = now() WHERE user_id = $1 AND revoked_at IS NULL", [id]);
       await audit(c, { actorId: a.id, action: "user.mfa_reset", targetType: "user", targetId: id, ip: req.ip });
       return { ok: true };
     });
@@ -252,6 +254,7 @@ export async function userRoutes(app: FastifyInstance, ctx: Ctx) {
              SELECT gk.container_id FROM container_group_keys gk WHERE gk.group_id = ANY($1::uuid[]))`, [groupIds]);
       }
       await c.query("UPDATE users SET status = 'suspended', role = 'user' WHERE id = $1", [id]);
+      await c.query("UPDATE trusted_devices SET revoked_at = now() WHERE user_id = $1 AND revoked_at IS NULL", [id]);
       await c.query("DELETE FROM sessions WHERE user_id = $1", [id]);
       await audit(c, { actorId: a.id, action: "user.offboarded", targetType: "user", targetId: id, ip: req.ip,
         details: { containers: touched.rowCount, withoutManager: orphan.rowCount } });

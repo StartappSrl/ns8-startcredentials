@@ -84,6 +84,36 @@ assert.equal((await lib.importKeePass(withKey, "", keyFile.buffer.slice(keyFile.
 await assert.rejects(lib.importKeePass(withKey, ""), /protetto: inserisci la password o il file chiave/);
 console.log("✓ KeePass senza password, con password vuota e con file chiave");
 
+// Gruppi tutti al primo livello con il percorso nel nome (come alcuni export Passbolt).
+{
+  const d = kdbxweb.Kdbx.create(new kdbxweb.Credentials(null), "Passbolt");
+  const root = d.getDefaultGroup();
+  const put = (groupName, title) => { const g = d.createGroup(root, groupName); d.createEntry(g).fields.set("Title", title); };
+  put("Ferramenta Rossi", "Router");
+  put("Ferramenta Rossi/Server", "NAS");
+  put("Ferramenta Rossi/Server/Backup", "Veeam");
+  put("Bianchi Srl", "PEC");
+  const r = await lib.importKeePass(await d.save(), "");
+  const plan = lib.planClientImport(r, []);
+  assert.deepEqual(plan.clients.map((c) => c.name), ["Bianchi Srl", "Ferramenta Rossi"], "solo le cartelle madri diventano clienti");
+  const rossi = plan.clients.find((c) => c.name === "Ferramenta Rossi");
+  assert.deepEqual(rossi.folders.map((f) => f.name), ["Server", "Backup"]);
+  assert.equal(rossi.items.length, 3);
+}
+// Gerarchia assente dal file: riassegnazione manuale nell'anteprima.
+{
+  const d = kdbxweb.Kdbx.create(new kdbxweb.Credentials(null), "Passbolt");
+  const root = d.getDefaultGroup();
+  for (const [g, t] of [["Verdi Snc", "Mail"], ["Firewall Verdi", "FortiGate"]]) d.createEntry(d.createGroup(root, g)).fields.set("Title", t);
+  const r = await lib.importKeePass(await d.save(), "");
+  assert.equal(lib.planClientImport(r, []).clients.length, 2);
+  const fixed = lib.planClientImport(r, [], { attach: { "firewall verdi": "verdi snc" } });
+  assert.deepEqual(fixed.clients.map((c) => c.name), ["Verdi Snc"]);
+  assert.deepEqual(fixed.clients[0].folders.map((f) => f.name), ["Firewall Verdi"]);
+  assert.equal(fixed.clients[0].items.length, 2);
+}
+console.log("✓ export Passbolt con gruppi piatti: cliente = cartella madre, sottocartelle nel cliente; riassegnazione manuale");
+
 // Campi OTP nativi di KeePass (export KDBX di Passbolt).
 {
   const d = kdbxweb.Kdbx.create(new kdbxweb.Credentials(null), "Passbolt");

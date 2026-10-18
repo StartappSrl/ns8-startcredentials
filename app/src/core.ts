@@ -18,10 +18,14 @@ export interface Config {
   port: number;
   maxAttachmentBytes: number;
   sessionHours: number;
+  /** Giorni di validità di un dispositivo attendibile (0 = funzione disattivata). */
+  trustedDeviceDays?: number;
   /** Mesi di conservazione del registro di audit (0 = senza limite). */
   auditRetentionMonths?: number;
   /** Tentativi di autenticazione al minuto per indirizzo IP. */
   authPerIpPerMinute?: number;
+  /** Tentativi al minuto per singolo utente o codice (login, MFA, inviti). */
+  authPerKeyPerMinute?: number;
   smtp?: { host: string; port: number; user?: string; pass?: string; encryption: "tls" | "starttls" | "none"; tlsVerify: boolean; from: string };
 }
 
@@ -44,7 +48,9 @@ export function loadConfig(env = process.env): Config {
     maxAttachmentBytes: Number(env.MAX_ATTACHMENT_MB ?? 50) * 1024 * 1024,
     sessionHours: Number(env.SESSION_HOURS ?? 12),
     auditRetentionMonths: Number(env.AUDIT_RETENTION_MONTHS ?? 24),
+    trustedDeviceDays: Math.max(0, Math.min(90, Number(env.TRUSTED_DEVICE_DAYS ?? 30))),
     authPerIpPerMinute: Number(env.AUTH_RATE_LIMIT ?? 30),
+    authPerKeyPerMinute: 10,
     // Variabili prodotte da discover-smarthost di NethServer 8.
     smtp: env.SMTP_HOST && env.SMTP_ENABLED === "1"
       ? {

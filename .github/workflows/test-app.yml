@@ -41,3 +41,5 @@ jobs:
         with:
           name: startcredentials-extension
           path: extension/startcredentials-extension.zip
+      - name: Motore dell'app Android
+        run: node mobile/scripts/build-engine.mjs && node mobile/engine/engine.test.mjs

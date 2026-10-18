@@ -4,6 +4,21 @@ import { Container, DirectoryUser, effectiveTotpUri, Folder, generatePassword, I
 import { download, initials, loadCollapsed, lock, relTime, saveCollapsed, signOut, tint } from "../shared";
 import { Brand, CopyButton, Dialog, ErrorNote, Meter, OtpCode, Secret, useAction, useLoad, useToast } from "./kit";
 
+/** Indirizzo apribile: senza protocollo si usa HTTPS; solo http/https sono ammessi. */
+export function siteUrl(u: string): string {
+  const t = u.trim();
+  if (/^https?:\/\//i.test(t)) return t;
+  if (/^[a-z][a-z0-9+.-]*:/i.test(t)) return "about:blank";
+  return `https://${t}`;
+}
+
+export function openSite(u: string): void {
+  const url = siteUrl(u);
+  if (url === "about:blank") return;
+  if (typeof chrome !== "undefined" && chrome.tabs?.create) void chrome.tabs.create({ url });
+  else window.open(url, "_blank", "noopener");
+}
+
 export const PERM_LABEL: Record<Permission, string> = { read: "Sola lettura", write: "Può modificare", manage: "Può gestire" };
 const TYPE_LABEL: Record<ItemData["type"], string> = { login: "Password", totp: "OTP", note: "Nota sicura", file: "File", ssh_key: "Chiave SSH" };
 const TYPE_TAG: Record<ItemData["type"], string> = { login: "PWD", totp: "OTP", note: "NOTA", file: "FILE", ssh_key: "SSH" };
@@ -556,9 +571,21 @@ export function ItemDetail({ vault, item, canWrite, canShare, folders, onEdit, o
       <div>
         <h2 style="word-break:break-word">{d.name}</h2>
         <div class="small muted">{TYPE_LABEL[d.type]}{folder ? ` · ${folder}` : ""}</div>
-        {(d.urls ?? []).map((u) => <div class="small"><a href={/^https?:\/\//.test(u) ? u : `https://${u}`} target="_blank" rel="noopener noreferrer">{u}</a></div>)}
+
       </div>
       {item.deletedAt && <div class="notice warn">Nel cestino dal {new Date(item.deletedAt).toLocaleDateString("it-IT")}</div>}
+      {(d.urls ?? []).length > 0 && (
+        <div class="stack" style="gap:6px">
+          <span class="small muted">{(d.urls ?? []).length > 1 ? "Siti" : "Sito"}</span>
+          {(d.urls ?? []).map((u) => (
+            <div class="input-group">
+              <a class="input mono ellipsis site-link" href={siteUrl(u)} target="_blank" rel="noopener noreferrer" title={`Apri ${u}`}>{u}</a>
+              <button class="btn sm" type="button" onClick={() => openSite(u)}>Apri</button>
+              <CopyButton value={u} />
+            </div>
+          ))}
+        </div>
+      )}
       {d.username && (
         <div class="stack" style="gap:6px">
           <span class="small muted">Nome utente</span>

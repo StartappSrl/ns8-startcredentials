@@ -58,6 +58,12 @@ Al ripristino il dump viene ricaricato automaticamente al primo avvio di Postgre
 - La compilazione automatica avviene solo su corrispondenza esatta del nome host, in HTTPS, nel frame principale.
 - Il registro di audit è una catena di hash: una modifica diretta al database viene rilevata.
 
+## App Android
+
+La cartella `mobile/` contiene l'app Android (Expo, React Native), con
+sblocco con l'impronta e uso offline in sola lettura. Istruzioni di
+compilazione e distribuzione in `mobile/README.md`.
+
 ## Funzioni
 
 Contenitori cliente con cartelle, password, OTP, note e allegati; area
@@ -77,8 +83,10 @@ Organizzazione: la chiave di firma si può ruotare (es. dopo l'uscita di un
 amministratore); la rotazione è firmata con la chiave precedente e le estensioni
 la seguono da sole, mentre una chiave non firmata viene respinta.
 
-Estensione: icona nei campi di accesso e proposta di salvare o aggiornare le
-password usate sui siti (facoltative); selezione multipla con cestino,
+Estensione: icona nei campi di accesso e OTP con menu delle credenziali sotto
+il campo (compila utente, password e codice OTP), proposta di salvare o
+aggiornare le password usate sui siti (facoltative); dispositivo attendibile per
+30 giorni senza codice MFA (`TRUSTED_DEVICE_DAYS`, 0 per disattivare); selezione multipla con cestino,
 ripristino e sposta in cartella; notifiche email di nuovi accessi.
 
 Condivisione di una singola password (sola lettura) con chi non vede il
@@ -119,7 +127,7 @@ Serve Node.js 22 e un PostgreSQL di test (`TEST_DATABASE_URL`, predefinito `post
 npm ci
 npm test -w packages/crypto          # 16 test del core crittografico
 npm run build -w packages/client
-npm test -w app                      # 22 scenari end-to-end su server e database reali
+npm test -w app                      # 23 scenari end-to-end su server e database reali
 npm run build -w extension           # produce extension/startcredentials-extension.zip
 npm run test:ui -w extension         # 27 passaggi dell'interfaccia (jsdom + server reale)
 npm run test:import -w extension     # import con il pacchetto per browser (KeePass reale, CSV, 1Password)
@@ -131,7 +139,7 @@ npm run test:site -w extension       # riconoscimento dell'estensione sulla pagi
 
 ## Stato
 
-Versione 0.5.0. Fasi 0, 1 e 2 implementate e testate; l'app mobile (fase 3) non
+Versione 0.6.0. Fasi 0, 1 e 2 implementate e testate; l'app mobile (fase 3) non
 è ancora iniziata. Prima dell'uso in produzione servono un
 penetration test esterno e una revisione indipendente della crittografia.
 L'app mobile (fase 3) userà `packages/crypto` e `packages/client`.

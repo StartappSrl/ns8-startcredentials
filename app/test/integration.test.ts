@@ -11,7 +11,7 @@ import { randomBytes } from "node:crypto";
 import type { FastifyInstance } from "fastify";
 import {
   Api, ApiError, completeRecovery, decryptExport, enableMfa, importAsClients, importBitwarden, importCsv, importInto, importStartCredentials,
-  login, passwordHealth, planClientImport, register, SecurityError, serverStatus, setupMfa, Vault, verifyMfa,
+  login, passwordHealth, planClientImport, register, trustDevice, SecurityError, serverStatus, setupMfa, Vault, verifyMfa,
 } from "@startcredentials/client";
 import { Config, createPool, Db, migrate, pruneAudit, totpAt } from "../src/core.js";
 import { APP_ROOT, buildApp } from "../src/server.js";
@@ -33,6 +33,8 @@ const cfg: Config = {
   maxAttachmentBytes: 5 * 1024 * 1024,
   sessionHours: 12,
   authPerIpPerMinute: 10_000,
+  trustedDeviceDays: 30,
+  authPerKeyPerMinute: 10_000,
 };
 
 const api = (token?: string) => new Api({ baseUrl: base, token });
@@ -670,6 +672,36 @@ describe("StartCredentials end-to-end", () => {
     assert.match(sentMail[1]!.subject, /gruppo Reperibilità/);
   });
 
+  test("dispositivo attendibile: niente codice MFA per 30 giorni, revoca manuale e automatica", async () => {
+    const paoloId = (await db.query("SELECT id FROM users WHERE email = 'paolo@azienda.it'")).rows[0].id;
+    const a = api();
+    assert.equal((await login(a, "paolo@azienda.it", "paolo master password")).state, "mfa_pending");
+    await verifyMfa(a, await mfaCode(paoloId));
+    const t = await trustDevice(a, "PC di Paolo – Chrome");
+    assert.equal(t.days, 30);
+    // Stesso dispositivo: basta la master password.
+    const b = api();
+    const r = await login(b, "paolo@azienda.it", "paolo master password", { deviceToken: t.deviceToken });
+    assert.equal(r.state, "active");
+    assert.equal(r.trustedDevice, true);
+    await Vault.unlock(b, "paolo master password");
+    // Password sbagliata: il token non basta.
+    await rejects(login(api(), "paolo@azienda.it", "password sbagliata!!", { deviceToken: t.deviceToken }), "invalid_credentials");
+    // Token falso o di un altro utente: si chiede il codice.
+    assert.equal((await login(api(), "paolo@azienda.it", "paolo master password", { deviceToken: "falso-falso-falso-falso" })).state, "mfa_pending");
+    assert.equal((await login(api(), "sara@azienda.it", "nuova password di sara", { deviceToken: t.deviceToken })).state, "mfa_pending");
+    // Revoca dalle impostazioni.
+    const paolo = await Vault.unlock(b, "paolo master password");
+    const list = await paolo.devices();
+    assert.equal(list.devices.length, 1);
+    await paolo.revokeDevice(list.devices[0]!.id);
+    assert.equal((await login(api(), "paolo@azienda.it", "paolo master password", { deviceToken: t.deviceToken })).state, "mfa_pending");
+    // Revoca automatica al cambio della master password.
+    const t2 = await trustDevice(b, "PC di Paolo – Edge");
+    await paolo.changePassword("paolo master password", "paolo password nuova", await mfaCode(paoloId), FAST);
+    assert.equal((await login(api(), "paolo@azienda.it", "paolo password nuova", { deviceToken: t2.deviceToken })).state, "mfa_pending");
+  });
+
   test("intestazioni di sicurezza: CSP senza eccezioni e cache corretta (rilievi del vulnerability assessment)", async () => {
     for (const path of ["/", "/privacy"]) {
       const r = await fetch(`${base}${path}`);
@@ -705,7 +737,7 @@ describe("StartCredentials end-to-end", () => {
     for (const action of ["org.initialized", "user.key_certified", "container.key_rotated", "container.imported", "user.recovery_completed", "auth.login_failed",
                           "auth.mfa_backup_used", "user.mfa_reset", "user.password_changed", "user.offboarded", "container.export",
                           "group.created", "group.member_set", "group.member_removed", "group.key_rotated", "container.group_set", "org.key_rotated",
-                          "item.shared", "item.unshared", "item.rekeyed"]) {
+                          "item.shared", "item.unshared", "item.rekeyed", "auth.device_trusted", "auth.device_revoked"]) {
       assert.ok(log.some((l) => l.action === action), `manca ${action}`);
     }
     assert.equal((await marco.verifyAudit()).ok, true);

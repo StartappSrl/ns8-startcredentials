@@ -189,3 +189,19 @@ td { padding: 10px 14px; border-bottom: 1px solid var(--line); vertical-align: m
 /* selezione multipla */
 .bulk-bar { position: sticky; top: 0; z-index: 2; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; padding: 10px 14px; background: var(--accent-soft); border-bottom: 1px solid var(--accent-line); }
 .row-check { width: 17px; height: 17px; accent-color: var(--accent); flex-shrink: 0; margin: 0; cursor: pointer; }
+
+/* sito cliccabile nel dettaglio */
+a.site-link { display: flex; align-items: center; text-decoration: none; color: var(--accent-ink); }
+a.site-link:hover { text-decoration: underline; }
+
+/* menu sotto i campi */
+body.inline-menu { background: var(--surface); width: 100%; min-height: 0; }
+.im { display: flex; flex-direction: column; font-size: 13px; }
+.im-head { display: flex; align-items: center; gap: 6px; padding: 6px 10px; border-bottom: 1px solid var(--line); color: var(--accent); font-weight: 600; font-size: 12px; }
+.im-head span { flex: 1; }
+.im-x { all: unset; cursor: pointer; color: var(--muted); padding: 0 4px; }
+.im-item { all: unset; display: flex; flex-direction: column; gap: 2px; padding: 8px 10px; cursor: pointer; border-bottom: 1px solid var(--line); }
+.im-item:hover, .im-item:focus-visible { background: var(--accent-soft); outline: none; }
+.im-name { font-weight: 600; color: var(--ink); }
+.im-sub { color: var(--muted); font-size: 12px; }
+.im-empty { padding: 12px 10px; color: var(--muted); display: flex; flex-direction: column; gap: 8px; align-items: flex-start; }

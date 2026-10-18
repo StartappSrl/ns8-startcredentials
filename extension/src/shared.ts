@@ -244,3 +244,31 @@ export async function clearPendingSave(tabId?: number): Promise<void> {
   await chrome.storage.session.remove("pendingSave");
   if (tabId) await chrome.action.setBadgeText({ text: "", tabId }).catch(() => undefined);
 }
+
+// ------------------------------------------------------------------ dispositivo attendibile
+
+export interface DeviceTrust { token: string; deviceId: string; expiresAt: string; email: string; serverUrl: string }
+
+/** Token del dispositivo attendibile per questo utente e server, se ancora valido. */
+export async function getDeviceTrust(email: string): Promise<DeviceTrust | null> {
+  const [{ deviceTrust }, settings] = await Promise.all([chrome.storage.local.get("deviceTrust"), getSettings()]);
+  const t = deviceTrust as DeviceTrust | undefined;
+  if (!t || t.serverUrl !== settings.serverUrl || t.email.toLowerCase() !== email.toLowerCase() || new Date(t.expiresAt) < new Date()) return null;
+  return t;
+}
+
+export async function saveDeviceTrust(t: DeviceTrust): Promise<void> {
+  await chrome.storage.local.set({ deviceTrust: t });
+}
+
+export async function clearDeviceTrust(): Promise<void> {
+  await chrome.storage.local.remove("deviceTrust");
+}
+
+/** Nome leggibile del dispositivo, es. "Chrome su Windows". */
+export function deviceName(): string {
+  const ua = navigator.userAgent;
+  const browser = /Edg\//.test(ua) ? "Edge" : /Chrome\//.test(ua) ? "Chrome" : "Browser";
+  const os = /Windows/.test(ua) ? "Windows" : /Mac OS X/.test(ua) ? "macOS" : /Linux/.test(ua) ? "Linux" : "dispositivo";
+  return `${browser} su ${os}`;
+}

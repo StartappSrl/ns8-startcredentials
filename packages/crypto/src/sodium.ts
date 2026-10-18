@@ -59,7 +59,14 @@ export function utf8(text: string): Uint8Array {
 }
 
 export function fromUtf8(data: Uint8Array): string {
-  return new TextDecoder("utf-8", { fatal: true }).decode(data);
+  let decoder: TextDecoder;
+  try {
+    decoder = new TextDecoder("utf-8", { fatal: true });
+  } catch {
+    // Alcuni ambienti (React Native con polyfill) non supportano l'opzione fatal.
+    decoder = new TextDecoder("utf-8");
+  }
+  return decoder.decode(data);
 }
 
 /** Cancella il contenuto di un buffer sensibile. */

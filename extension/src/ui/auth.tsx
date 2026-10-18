@@ -1,9 +1,9 @@
 import { ComponentChildren } from "preact";
 import { useState } from "preact/hooks";
 import {
-  Api, completeRecovery, enableMfa, login, register, serverStatus, setupMfa, Vault, verifyMfa,
+  Api, completeRecovery, enableMfa, login, register, serverStatus, setupMfa, trustDevice, Vault, verifyMfa,
 } from "@startcredentials/client";
-import { api, ensureServerPermission, getSettings, saveSettings, saveToken, signOut, storeVault } from "../shared";
+import { api, deviceName, ensureServerPermission, getDeviceTrust, getSettings, saveDeviceTrust, saveSettings, saveToken, signOut, storeVault } from "../shared";
 import { Brand, CopyButton, ErrorNote, Meter, Qr, strength, useAction, useLoad } from "./kit";
 
 export function AuthFrame({ title, intro, children }: { title: string; intro?: ComponentChildren; children: ComponentChildren }) {
@@ -167,7 +167,8 @@ export function Login({ onDone, onSetup }: { onDone: (password: string, state: s
     e.preventDefault();
     run(async () => {
       const a = await api();
-      const r = await login(a, em, pw);
+      const trust = await getDeviceTrust(em);
+      const r = await login(a, em, pw, { deviceToken: trust?.token });
       await saveToken(r.token);
       await saveSettings({ email: em });
       onDone(pw, r.state);
@@ -196,12 +197,14 @@ export function MfaSetup({ onDone }: { onDone: () => void }) {
   const setup = useLoad(async () => setupMfa(await api()), []);
   const [code, setCode] = useState("");
   const [backup, setBackup] = useState<string[] | null>(null);
+  const [trustNew, setTrustNew] = useState(true);
   const { busy, error, run } = useAction();
   if (backup) {
     return (
       <AuthFrame title="Salva i codici di riserva" intro="Se perdi il telefono, ognuno di questi codici sostituisce una volta il codice dell'app. Stampali o salvali fuori da StartCredentials: non verranno mostrati di nuovo.">
         <BackupCodes codes={backup} />
-        <button class="btn primary" onClick={onDone}>Ho salvato i codici</button>
+        <TrustCheckbox value={trustNew} onChange={setTrustNew} />
+        <button class="btn primary" onClick={async () => { if (trustNew) await rememberDevice(); onDone(); }}>Ho salvato i codici</button>
       </AuthFrame>
     );
   }
@@ -242,13 +245,36 @@ export function BackupCodes({ codes }: { codes: string[] }) {
   );
 }
 
+/** Rende attendibile questo dispositivo dopo il codice MFA (se il server lo consente). */
+async function rememberDevice(): Promise<void> {
+  try {
+    const a = await api();
+    const { email = "", serverUrl = "" } = await getSettings();
+    const t = await trustDevice(a, deviceName());
+    await saveDeviceTrust({ token: t.deviceToken, deviceId: t.deviceId, expiresAt: t.expiresAt, email, serverUrl });
+  } catch {
+    /* funzione disattivata sul server: si continua senza */
+  }
+}
+
+function TrustCheckbox({ value, onChange }: { value: boolean; onChange: (v: boolean) => void }) {
+  return (
+    <label class="check">
+      <input type="checkbox" checked={value} onChange={(e) => onChange(e.currentTarget.checked)} />
+      Considera attendibile questo dispositivo per 30 giorni (non chiederà il codice, solo la master password)
+    </label>
+  );
+}
+
 export function MfaVerify({ onDone, onCancel }: { onDone: () => void; onCancel: () => void }) {
   const [code, setCode] = useState("");
+  const [trust, setTrust] = useState(true);
   const { busy, error, run } = useAction();
   return (
     <AuthFrame title="Codice di verifica" intro="Inserisci il codice a 6 cifre generato dalla tua app di autenticazione. Se non hai il telefono, usa uno dei codici di riserva.">
-      <form class="stack" onSubmit={(e) => { e.preventDefault(); run(async () => { await verifyMfa(await api(), code.trim()); onDone(); }); }}>
+      <form class="stack" onSubmit={(e) => { e.preventDefault(); run(async () => { await verifyMfa(await api(), code.trim()); if (trust) await rememberDevice(); onDone(); }); }}>
         <input class="input mono" aria-label="Codice a 6 cifre" style="font-size:22px;letter-spacing:6px;text-align:center" autoComplete="one-time-code" autoFocus pattern="[0-9]{6}|[A-Za-z0-9]{4}-?[A-Za-z0-9]{4}" required value={code} onInput={(e) => setCode(e.currentTarget.value)} />
+        <TrustCheckbox value={trust} onChange={setTrust} />
         <ErrorNote error={error} />
         <button class="btn primary" disabled={busy}>Verifica</button>
         <button type="button" class="btn ghost sm" onClick={onCancel}>Esci</button>

@@ -56,7 +56,7 @@ export async function buildApp(cfg: Config, db: Db, opts: { mailer?: Mailer } = 
     cfg, db, serverSetup,
     mailer: createMailer(cfg),
     authLimiter: new RateLimiter(cfg.authPerIpPerMinute ?? 30, 60_000),
-    keyLimiter: new RateLimiter(10, 60_000),
+    keyLimiter: new RateLimiter(cfg.authPerKeyPerMinute ?? 10, 60_000),
     apiLimiter: new RateLimiter(600, 60_000),
     pendingLogins: new Map(),
   };

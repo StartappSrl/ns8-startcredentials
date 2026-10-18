@@ -23,7 +23,15 @@ const enc = new TextEncoder();
 const dec = new TextDecoder();
 const json = (v: unknown) => enc.encode(JSON.stringify(v));
 const unjson = <T>(b: Uint8Array) => JSON.parse(dec.decode(b)) as T;
-const uuid = () => globalThis.crypto.randomUUID();
+/** UUID v4: randomUUID dove c'è (browser, Node), altrimenti da getRandomValues (React Native con polyfill). */
+const uuid = (): string => {
+  if (typeof globalThis.crypto?.randomUUID === "function") return globalThis.crypto.randomUUID();
+  const b = globalThis.crypto.getRandomValues(new Uint8Array(16));
+  b[6] = (b[6]! & 0x0f) | 0x40;
+  b[8] = (b[8]! & 0x3f) | 0x80;
+  const h = [...b].map((x) => x.toString(16).padStart(2, "0")).join("");
+  return `${h.slice(0, 8)}-${h.slice(8, 12)}-${h.slice(12, 16)}-${h.slice(16, 20)}-${h.slice(20)}`;
+};
 
 const ctxs = {
   metaKey: (cid: string) => `sc:container-meta-key:v1:${cid}`,
@@ -174,18 +182,28 @@ export async function register(api: Api, p: RegisterParams): Promise<{ token: st
 }
 
 /** Login OPAQUE: il server non riceve mai la password. */
-export async function login(api: Api, email: string, password: string): Promise<{ token: string; state: SessionState }> {
+export async function login(api: Api, email: string, password: string, opts: { deviceToken?: string } = {}): Promise<{ token: string; state: SessionState; trustedDevice?: boolean }> {
   await ready();
   const { clientLoginState, startLoginRequest } = opaque.client.startLogin({ password });
   const start = await api.post<{ loginId: string; loginResponse: string }>("/auth/login/start", { email, startLoginRequest });
   const fin = opaque.client.finishLogin({ clientLoginState, loginResponse: start.loginResponse, password });
   // Credenziali errate: completiamo comunque il giro per non distinguere i casi.
-  const res = await api.post<{ token: string; state: SessionState }>("/auth/login/finish", {
+  const res = await api.post<{ token: string; state: SessionState; trustedDevice?: boolean }>("/auth/login/finish", {
     loginId: start.loginId,
     finishLoginRequest: fin?.finishLoginRequest ?? toB64(globalThis.crypto.getRandomValues(new Uint8Array(64))),
+    deviceToken: opts.deviceToken,
   });
   api.token = res.token;
   return res;
+}
+
+/**
+ * Rende attendibile il dispositivo (dopo il codice MFA): per i giorni previsti
+ * dal server, il login da qui chiede solo la master password. Il token va
+ * conservato solo su questo dispositivo.
+ */
+export async function trustDevice(api: Api, name: string): Promise<{ deviceToken: string; deviceId: string; expiresAt: string; days: number }> {
+  return api.post("/auth/devices/trust", { name });
 }
 
 export async function setupMfa(api: Api): Promise<{ secret: string; otpauthUri: string }> {
@@ -872,6 +890,14 @@ export class Vault {
       wipe(mk);
     }
     await this.refreshMe();
+  }
+
+  async devices(): Promise<{ days: number; devices: { id: string; name: string; createdAt: string; lastUsedAt: string | null; expiresAt: string }[] }> {
+    return this.api.get("/me/devices");
+  }
+
+  async revokeDevice(id: string): Promise<void> {
+    await this.api.del(`/me/devices/${id}`);
   }
 
   async mfaStatus(): Promise<{ backupCodesRemaining: number }> {

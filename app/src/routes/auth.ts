@@ -3,7 +3,7 @@ import { randomBytes, randomUUID } from "node:crypto";
 import { z } from "zod";
 import * as opaque from "@serenity-kit/opaque";
 import {
-  audit, badRequest, base32Encode, conflict, decryptServerSecret, encryptServerSecret, forbidden,
+  audit, badRequest, base32Encode, conflict, decryptServerSecret, encryptServerSecret, forbidden, notFound,
   getSetting, newToken, safeEqual, setSetting, tokenHash, Tx, tx, unauthorized, verifyTotp,
 } from "../core.js";
 import { Ctx, requireAuth } from "../server.js";
@@ -183,7 +183,7 @@ export async function authRoutes(app: FastifyInstance, ctx: Ctx) {
   });
 
   app.post("/api/v1/auth/login/finish", async (req) => {
-    const body = z.object({ loginId: z.string().max(100), finishLoginRequest: b64 }).parse(req.body);
+    const body = z.object({ loginId: z.string().max(100), finishLoginRequest: b64, deviceToken: z.string().max(200).optional() }).parse(req.body);
     limit(req);
     const pending = ctx.pendingLogins.get(body.loginId);
     ctx.pendingLogins.delete(body.loginId);
@@ -201,10 +201,19 @@ export async function authRoutes(app: FastifyInstance, ctx: Ctx) {
     return tx(db, async (c) => {
       const u = await c.query("SELECT mfa_enabled FROM users WHERE id = $1 AND status = 'active'", [pending.userId]);
       if (!u.rows[0]) throw unauthorized("invalid_credentials");
-      const state = u.rows[0].mfa_enabled ? "mfa_pending" : "mfa_setup";
+      let state: "mfa_pending" | "mfa_setup" | "active" = u.rows[0].mfa_enabled ? "mfa_pending" : "mfa_setup";
+      // Dispositivo attendibile dello stesso utente, non scaduto né revocato: niente codice MFA.
+      let trusted = false;
+      if (state === "mfa_pending" && body.deviceToken && cfg.trustedDeviceDays) {
+        const d = await c.query(
+          `UPDATE trusted_devices SET last_used_at = now()
+            WHERE token_hash = $1 AND user_id = $2 AND revoked_at IS NULL AND expires_at > now() RETURNING id`,
+          [tokenHash(cfg, body.deviceToken), pending.userId]);
+        if (d.rowCount) { state = "active"; trusted = true; }
+      }
       const token = await createSession(c, ctx, pending.userId!, state, req);
-      await audit(c, { actorId: pending.userId, action: "auth.login", ip: req.ip });
-      return { token, state };
+      await audit(c, { actorId: pending.userId, action: "auth.login", ip: req.ip, details: trusted ? { trustedDevice: true } : {} });
+      return { token, state, trustedDevice: trusted };
     });
   });
 
@@ -264,6 +273,43 @@ export async function authRoutes(app: FastifyInstance, ctx: Ctx) {
     return { state: "active" };
   });
 
+  // ------------------------------------------------------------ dispositivi attendibili
+
+  app.post("/api/v1/auth/devices/trust", async (req) => {
+    const a = requireAuth(req);
+    const { name } = z.object({ name: z.string().trim().min(1).max(80) }).parse(req.body);
+    if (!cfg.trustedDeviceDays) throw forbidden("trusted_devices_disabled");
+    const token = newToken();
+    return tx(db, async (c) => {
+      const count = await c.query("SELECT count(*)::int AS n FROM trusted_devices WHERE user_id = $1 AND revoked_at IS NULL AND expires_at > now()", [a.id]);
+      if (count.rows[0].n >= 20) throw conflict("too_many_devices", "Troppi dispositivi attendibili: revocane qualcuno dalle impostazioni");
+      const r = await c.query(
+        `INSERT INTO trusted_devices (id, user_id, token_hash, name, expires_at) VALUES ($1,$2,$3,$4, now() + make_interval(days => $5)) RETURNING id, expires_at`,
+        [randomUUID(), a.id, tokenHash(cfg, token), name, cfg.trustedDeviceDays]);
+      await audit(c, { actorId: a.id, action: "auth.device_trusted", ip: req.ip, details: { name, days: cfg.trustedDeviceDays } });
+      return { deviceToken: token, deviceId: r.rows[0].id, expiresAt: r.rows[0].expires_at, days: cfg.trustedDeviceDays };
+    });
+  });
+
+  app.get("/api/v1/me/devices", async (req) => {
+    const a = requireAuth(req);
+    const r = await db.query(
+      `SELECT id, name, created_at, last_used_at, expires_at FROM trusted_devices
+        WHERE user_id = $1 AND revoked_at IS NULL AND expires_at > now() ORDER BY created_at DESC`, [a.id]);
+    return { days: cfg.trustedDeviceDays ?? 0, devices: r.rows.map((d) => ({ id: d.id, name: d.name, createdAt: d.created_at, lastUsedAt: d.last_used_at, expiresAt: d.expires_at })) };
+  });
+
+  app.delete("/api/v1/me/devices/:id", async (req) => {
+    const a = requireAuth(req);
+    const { id } = z.object({ id: z.string().uuid() }).parse(req.params);
+    return tx(db, async (c) => {
+      const r = await c.query("UPDATE trusted_devices SET revoked_at = now() WHERE id = $1 AND user_id = $2 AND revoked_at IS NULL", [id, a.id]);
+      if (!r.rowCount) throw notFound();
+      await audit(c, { actorId: a.id, action: "auth.device_revoked", ip: req.ip, details: { deviceId: id } });
+      return { ok: true };
+    });
+  });
+
   // ------------------------------------------------------------ recupero account
 
   app.post("/api/v1/auth/recover/start", async (req) => {
@@ -297,6 +343,7 @@ export async function authRoutes(app: FastifyInstance, ctx: Ctx) {
         [u.id, body.registrationRecord],
       );
       await c.query("DELETE FROM sessions WHERE user_id = $1", [u.id]);
+      await c.query("UPDATE trusted_devices SET revoked_at = now() WHERE user_id = $1 AND revoked_at IS NULL", [u.id]);
       await audit(c, { actorId: u.id, action: "user.recovery_completed", targetType: "user", targetId: u.id, ip: req.ip });
       return { ok: true };
     });

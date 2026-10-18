@@ -419,6 +419,8 @@ export function Import({ vault, containers, onChanged }: { vault: Vault; contain
   const personal = containers.find((c) => c.kind === "personal");
   const [mode, setMode] = useState<"clients" | "single">("clients");
   const [level, setLevel] = useState<1 | 2>(1);
+  const [attach, setAttach] = useState<Record<string, string>>({});
+  const normName = (x: string) => x.trim().toLocaleLowerCase("it");
   const isAdmin = vault.me.role === "admin";
   const [target, setTarget] = useState(writable[0]?.id ?? "");
   const [looseTarget, setLooseTarget] = useState(personal?.id ?? "");
@@ -431,7 +433,8 @@ export function Import({ vault, containers, onChanged }: { vault: Vault; contain
   const [done, setDone] = useState<{ single?: number; clients?: ClientImportSummary } | null>(null);
   const { busy, error, run } = useAction();
   const isKdbx = file?.name.toLowerCase().endsWith(".kdbx");
-  const plan = preview ? planClientImport(preview, containers, { level, canCreate: isAdmin }) : null;
+  const basePlan = preview ? planClientImport(preview, containers, { level, canCreate: isAdmin }) : null;
+  const plan = preview ? planClientImport(preview, containers, { level, canCreate: isAdmin, attach }) : null;
   const topFolders = plan?.clients.length ?? 0;
   const singleWrapper = (preview?.folders.filter((f) => !f.parentKey).length ?? 0) === 1;
 
@@ -445,6 +448,7 @@ export function Import({ vault, containers, onChanged }: { vault: Vault; contain
     else if (name.endsWith(".json")) r = importBitwarden(await file.text());
     else r = importCsv(await file.text(), source);
     if (source !== "startcredentials") r.source = source;
+    setAttach({});
     // Senza cartelle principali la modalità per cliente non ha senso.
     if (!r.folders.some((f) => !f.parentKey)) setMode("single");
     // Tutto racchiuso in un'unica cartella esterna (es. "Passbolt"): i clienti sono al secondo livello.
@@ -550,18 +554,30 @@ export function Import({ vault, containers, onChanged }: { vault: Vault; contain
           topFolders === 0 ? <div class="notice warn">Il file non contiene cartelle: usa «Tutto in un solo cliente».</div> : (
             <div class="card table-wrap">
               <table>
-                <thead><tr><th>Cliente</th><th>Elementi</th><th>Cartelle</th><th></th></tr></thead>
+                <thead><tr><th>Cartella principale</th><th>Diventa</th><th>Elementi</th><th>Sottocartelle</th><th></th></tr></thead>
                 <tbody>
-                  {plan.clients.map((c) => (
+                  {basePlan!.clients.map((b) => {
+                    const target = attach[normName(b.name)];
+                    const c = plan.clients.find((x) => normName(x.name) === normName(b.name));
+                    return (
                     <tr>
-                      <td>{c.name}</td>
+                      <td>{b.name}</td>
+                      <td>
+                        <select class="input" style="min-width:180px" aria-label={`Destinazione di ${b.name}`} value={target ?? ""}
+                          onChange={(e) => { const v = e.currentTarget.value; const next = { ...attach }; if (v) next[normName(b.name)] = v; else delete next[normName(b.name)]; setAttach(next); }}>
+                          <option value="">Cliente</option>
+                          {basePlan!.clients.filter((o) => o.name !== b.name && !attach[normName(o.name)]).map((o) => <option value={normName(o.name)}>Cartella di {o.name}</option>)}
+                        </select>
+                      </td>
+                      {!c ? <td colspan={3} class="small muted">Spostata dentro un altro cliente</td> : (<>
                       <td class="mono">{c.items.length}</td>
-                      <td class="mono">{c.folders.length}</td>
+                      <td class="small">{c.folders.length ? c.folders.slice(0, 3).map((f) => f.name).join(", ") + (c.folders.length > 3 ? ` e altre ${c.folders.length - 3}` : "") : "—"}</td>
                       <td>{c.readOnly ? <span class="badge warn">Esiste, sola lettura: saltato</span>
                         : c.cannotCreate ? <span class="badge warn">Non esiste: lo crea solo un amministratore</span>
-                        : c.existing ? <span class="badge">Esistente</span> : <span class="badge accent">Nuovo</span>}</td>
+                        : c.existing ? <span class="badge">Esistente</span> : <span class="badge accent">Nuovo</span>}</td></>)}
                     </tr>
-                  ))}
+                    );
+                  })}
                   {plan.loose.length > 0 && (
                     <tr><td class="muted">Senza cartella</td><td class="mono">{plan.loose.length}</td><td></td><td class="small muted">{looseTarget ? "Nella destinazione scelta" : "Non importati"}</td></tr>
                   )}
@@ -583,7 +599,7 @@ export function Import({ vault, containers, onChanged }: { vault: Vault; contain
           )}
           {preview && mode === "clients" && topFolders > 0 && plan && (
             <button class="btn primary" disabled={busy} onClick={() => run(async () => {
-              const r = await importAsClients(vault, preview, { looseContainerId: looseTarget || null, onProgress: setProgress, level });
+              const r = await importAsClients(vault, preview, { looseContainerId: looseTarget || null, onProgress: setProgress, level, attach });
               setProgress(null);
               onChanged();
               setDone({ clients: r });
@@ -717,6 +733,7 @@ function AccountSecurity({ vault }: { vault: Vault }) {
         <div><div style="font-weight:500">Export cifrato</div><div class="small muted">Copia di tutto ciò che puoi leggere, allegati compresi, protetta da una passphrase.</div></div>
         <button class="btn" onClick={() => setDialog("export")}>Esporta</button>
       </div>
+      <TrustedDevices vault={vault} />
       {dialog === "password" && <ChangePasswordDialog vault={vault} onClose={() => { setDialog(null); mfa.reload(); }} />}
       {dialog === "codes" && <BackupCodesDialog vault={vault} onClose={() => { setDialog(null); mfa.reload(); }} />}
       {dialog === "export" && <ExportDialog vault={vault} onClose={() => setDialog(null)} />}
@@ -829,5 +846,30 @@ function ExportDialog({ vault, onClose }: { vault: Vault; onClose: () => void })
         </form>
       )}
     </Dialog>
+  );
+}
+
+function TrustedDevices({ vault }: { vault: Vault }) {
+  const list = useLoad(() => vault.devices(), []);
+  const mine = useLoad(async () => (await chrome.storage.local.get("deviceTrust")).deviceTrust?.deviceId as string | undefined, []);
+  const { error, run } = useAction();
+  if (!list.data || !list.data.days) return null;
+  return (
+    <div class="stack" style="gap:8px">
+      <div style="font-weight:500">Dispositivi attendibili</div>
+      <div class="small muted">Da questi dispositivi l'accesso chiede solo la master password, senza codice MFA, per {list.data.days} giorni.</div>
+      {list.data.devices.length === 0 && <div class="small muted">Nessuno.</div>}
+      {list.data.devices.map((d) => (
+        <div class="file">
+          <span class="grow">{d.name}{d.id === mine.data ? " (questo)" : ""}<span class="small muted"> · scade il {new Date(d.expiresAt).toLocaleDateString("it-IT")}</span></span>
+          <button class="btn sm ghost danger" onClick={() => run(async () => {
+            await vault.revokeDevice(d.id);
+            if (d.id === mine.data) await chrome.storage.local.remove("deviceTrust");
+            list.reload();
+          })}>Revoca</button>
+        </div>
+      ))}
+      <ErrorNote error={error} />
+    </div>
   );
 }
