@@ -27,8 +27,7 @@ jobs:
           distribution: temurin
           java-version: 17
 
-      - name: SDK Android
-        uses: android-actions/setup-android@v3
+      # L'Android SDK è già installato sui runner ubuntu-latest (ANDROID_HOME).
 
       - name: Pacchetti condivisi e motore crittografico
         run: |
