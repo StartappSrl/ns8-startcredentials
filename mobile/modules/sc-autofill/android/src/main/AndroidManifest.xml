@@ -1,0 +1,15 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+  <application>
+    <!-- Servizio di autofill: Android lo collega solo se l'utente lo sceglie nelle impostazioni. -->
+    <service
+      android:name="it.startapp.credentials.autofill.ScAutofillService"
+      android:label="StartCredentials"
+      android:permission="android.permission.BIND_AUTOFILL_SERVICE"
+      android:exported="true">
+      <intent-filter>
+        <action android:name="android.service.autofill.AutofillService" />
+      </intent-filter>
+      <meta-data android:name="android.autofill" android:resource="@xml/sc_autofill_service" />
+    </service>
+  </application>
+</manifest>

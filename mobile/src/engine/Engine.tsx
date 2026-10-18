@@ -33,6 +33,8 @@ export interface Engine {
   syncForOffline(): Promise<boolean>;
   hasOfflineData(): Promise<boolean>;
   wipeOffline(): void;
+  /** Chiamata quando il server risponde 401 fuori dall'accesso (sessione scaduta). */
+  onUnauthorized(fn: (() => void) | null): void;
 }
 
 const EngineCtx = createContext<Engine | null>(null);
@@ -65,6 +67,7 @@ export function EngineProvider({ children }: { children: ReactNode }) {
   const [offline, setOffline] = useState(false);
   const [lastSync, setLastSync] = useState<number | null>(null);
   const offlineEnabled = useRef(true);
+  const unauthorized = useRef<(() => void) | null>(null);
   const readyWaiters = useRef<(() => void)[]>([]);
 
   const send = (m: unknown) => web.current?.postMessage(JSON.stringify(m));
@@ -97,6 +100,7 @@ export function EngineProvider({ children }: { children: ReactNode }) {
       return;
     }
     setOffline(false);
+    if (r.status === 401 && !key.startsWith("/api/v1/auth/")) unauthorized.current?.();
     const ct = r.headers.get("content-type") ?? "";
     const body = bytesToB64(await r.arrayBuffer());
     if (cacheable && r.ok) await putCached(origin, key, { status: r.status, contentType: ct, body }).catch(() => undefined);
@@ -162,6 +166,7 @@ export function EngineProvider({ children }: { children: ReactNode }) {
     },
     hasOfflineData: async () => !!allowedOrigin.current && !!(await getCached(allowedOrigin.current, "/api/v1/me").catch(() => null)),
     wipeOffline: () => { wipeOffline(); setLastSync(null); },
+    onUnauthorized: (fn) => { unauthorized.current = fn; },
   }), [ready, call, offline, lastSync]);
 
   return (

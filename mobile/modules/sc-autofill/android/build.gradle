@@ -1,0 +1,19 @@
+plugins {
+  id 'com.android.library'
+  id 'expo-module-gradle-plugin'
+}
+
+group = 'it.startapp.credentials'
+version = '0.6.0'
+
+android {
+  namespace "it.startapp.credentials.autofill"
+  defaultConfig {
+    versionCode 1
+    versionName '0.6.0'
+  }
+}
+
+dependencies {
+  implementation "androidx.annotation:annotation:1.9.1"
+}

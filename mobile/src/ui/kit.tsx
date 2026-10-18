@@ -1,13 +1,15 @@
 import { ReactNode, useEffect, useState } from "react";
 import { ActivityIndicator, Image, Pressable, StyleSheet, Text, TextInput, TextInputProps, View, ViewStyle } from "react-native";
 import * as Clipboard from "expo-clipboard";
-import { color, mono, radius } from "../theme";
+import { color, isDark, mono, radius } from "../theme";
 import { useEngine } from "../engine/Engine";
 
 export function Brand({ small }: { small?: boolean }) {
   return (
     <View style={{ gap: 4 }}>
-      <Image source={require("../../assets/startapp-logo.png")} style={{ height: small ? 22 : 34, width: small ? 94 : 145 }} resizeMode="contain" accessibilityLabel="StartApp" />
+      <View style={isDark ? { backgroundColor: "#FFFFFF", borderRadius: 8, padding: 6, alignSelf: "flex-start" } : undefined}>
+        <Image source={require("../../assets/startapp-logo.png")} style={{ height: small ? 22 : 34, width: small ? 94 : 145 }} resizeMode="contain" accessibilityLabel="StartApp" />
+      </View>
       <Text style={[s.brandName, small && { fontSize: 10 }]}>CREDENTIALS</Text>
     </View>
   );

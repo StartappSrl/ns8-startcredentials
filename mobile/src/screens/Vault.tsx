@@ -1,5 +1,6 @@
 import { ReactElement, useCallback, useEffect, useMemo, useState } from "react";
-import { ActivityIndicator, FlatList, Linking, Pressable, RefreshControl, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
+import { ActivityIndicator, Alert, FlatList, Linking, Pressable, RefreshControl, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
+import * as DocumentPicker from "expo-document-picker";
 import { File, Paths } from "expo-file-system";
 import * as Sharing from "expo-sharing";
 import type { Container, Folder, Item } from "@startcredentials/client";
@@ -11,7 +12,7 @@ import { color, mono } from "../theme";
 const where = (c: { kind: string; meta: { name: string } }) => (c.kind === "personal" ? "Area personale" : c.meta.name);
 const initials = (n: string) => n.split(/\s+/).filter(Boolean).slice(0, 2).map((p) => p[0]!.toUpperCase()).join("");
 
-export function Header({ title, subtitle, back }: { title: string; subtitle?: string; back?: boolean }) {
+export function Header({ title, subtitle, back, action }: { title: string; subtitle?: string; back?: boolean; action?: { label: string; onPress: () => void } }) {
   const app = useApp();
   return (
     <View style={st.header}>
@@ -20,6 +21,11 @@ export function Header({ title, subtitle, back }: { title: string; subtitle?: st
         <Text style={st.title} numberOfLines={1} accessibilityRole="header">{title}</Text>
         {subtitle && <Text style={st.subtitle} numberOfLines={1}>{subtitle}</Text>}
       </View>
+      {action && (
+        <Pressable accessibilityRole="button" onPress={action.onPress} hitSlop={8} style={({ pressed }) => [st.action, pressed && { opacity: 0.7 }]}>
+          <Text style={{ color: "#fff", fontWeight: "700" }}>{action.label}</Text>
+        </Pressable>
+      )}
     </View>
   );
 }
@@ -58,7 +64,7 @@ export function ClientsScreen() {
       setError(errorText(e));
     }
   }, []);
-  useEffect(() => { void load(); }, []);
+  useEffect(() => { void load(); }, [app.refreshTick]);
   const shown = (list ?? []).filter((c) => !q || `${c.meta.name} ${c.meta.sector ?? ""}`.toLowerCase().includes(q.toLowerCase()));
   return (
     <View style={{ flex: 1 }}>
@@ -71,7 +77,7 @@ export function ClientsScreen() {
         keyExtractor={(c) => c.id}
         refreshControl={<RefreshControl refreshing={refreshing} onRefresh={async () => { setRefreshing(true); await load(); await engine.syncForOffline(); setRefreshing(false); }} />}
         renderItem={({ item: c }) => (
-          <Pressable accessibilityRole="button" onPress={() => app.push({ name: "container", id: c.id, title: where(c) })} style={({ pressed }) => [st.row, pressed && { backgroundColor: color.accentSoft }]}>
+          <Pressable accessibilityRole="button" onPress={() => app.push({ name: "container", id: c.id, title: where(c), canWrite: c.permission !== "read", canManage: c.permission === "manage" && c.kind === "client" })} style={({ pressed }) => [st.row, pressed && { backgroundColor: color.accentSoft }]}>
             <View style={st.mono}><Text style={st.monoText}>{c.kind === "personal" ? "AP" : initials(c.meta.name)}</Text></View>
             <View style={{ flex: 1 }}>
               <Text style={st.rowTitle} numberOfLines={1}>{where(c)}</Text>
@@ -87,7 +93,7 @@ export function ClientsScreen() {
 
 // ------------------------------------------------------------------ cliente con cartelle
 
-export function ContainerScreen({ id, title }: { id: string; title: string }) {
+export function ContainerScreen({ id, title, canWrite, canManage }: { id: string; title: string; canWrite: boolean; canManage: boolean }) {
   const engine = useEngine();
   const app = useApp();
   const [folders, setFolders] = useState<Folder[]>([]);
@@ -95,17 +101,18 @@ export function ContainerScreen({ id, title }: { id: string; title: string }) {
   const [closed, setClosed] = useState<Set<string>>(new Set());
   const [q, setQ] = useState("");
   const [error, setError] = useState<string | null>(null);
+  const [trash, setTrash] = useState(false);
   useEffect(() => {
     (async () => {
       try {
-        const [c, its] = await Promise.all([engine.call<{ folders: Folder[] }>("container", id), engine.call<Item[]>("items", id)]);
+        const [c, its] = await Promise.all([engine.call<{ folders: Folder[] }>("container", id), engine.call<Item[]>("items", id, trash)]);
         setFolders(c.folders);
         setItems(its);
       } catch (e) {
         setError(errorText(e));
       }
     })();
-  }, [id]);
+  }, [id, trash, app.refreshTick]);
   const visible = useMemo(() => (items ?? []).filter((i) => !q || [i.data.name, i.data.username, ...(i.data.urls ?? [])].some((v) => v?.toLowerCase().includes(q.toLowerCase()))), [items, q]);
   const children = (pid: string | null) => folders.filter((f) => (f.parentId ?? null) === pid).sort((a, b) => a.name.localeCompare(b.name, "it"));
   const itemsIn = (fid: string | null) => visible.filter((i) => (i.folderId ?? null) === fid);
@@ -113,7 +120,7 @@ export function ContainerScreen({ id, title }: { id: string; title: string }) {
 
   // Righe dell'albero: cartelle comprimibili e relativi elementi.
   const rows: { key: string; node: ReactElement }[] = [];
-  const open = (i: Item) => app.push({ name: "item", item: i, where: title });
+  const open = (i: Item) => app.push({ name: "item", item: i, where: title, canWrite, canManage });
   for (const i of itemsIn(null)) rows.push({ key: i.id, node: <ItemRow item={i} onPress={() => open(i)} /> });
   const walk = (f: Folder, depth: number) => {
     const n = count(f.id);
@@ -135,8 +142,13 @@ export function ContainerScreen({ id, title }: { id: string; title: string }) {
 
   return (
     <View style={{ flex: 1 }}>
-      <Header title={title} back />
+      <Header title={title} back action={canWrite && !engine.offline ? { label: "+ Nuovo", onPress: () => app.push({ name: "edit", containerId: id, containerTitle: title }) } : undefined} />
       <SearchBox value={q} onChange={setQ} placeholder="Cerca nel cliente…" />
+      <View style={{ flexDirection: "row", gap: 8, paddingHorizontal: 12, paddingBottom: 8 }}>
+        <Button title={trash ? "Torna agli elementi" : "Cestino"} kind="secondary" onPress={() => setTrash(!trash)} style={{ flex: 1, minHeight: 38 }} />
+        {canManage && !engine.offline && <Button title="Condividi" kind="secondary" onPress={() => app.push({ name: "share", containerId: id, title })} style={{ flex: 1, minHeight: 38 }} />}
+      </View>
+      {trash && <Text style={{ paddingHorizontal: 16, paddingBottom: 6, color: color.muted }}>Gli elementi restano nel cestino per 30 giorni.</Text>}
       {error && <View style={{ padding: 16 }}><Notice kind="error">{error}</Notice></View>}
       {!items && !error ? <ActivityIndicator style={{ marginTop: 32 }} color={color.accent} /> : (
         <FlatList data={rows} keyExtractor={(r) => r.key} renderItem={({ item }) => item.node} ListEmptyComponent={<Text style={st.empty}>Nessun elemento.</Text>} />
@@ -147,7 +159,7 @@ export function ContainerScreen({ id, title }: { id: string; title: string }) {
 
 // ------------------------------------------------------------------ dettaglio
 
-export function ItemScreen({ item, whereName }: { item: Item; whereName: string }) {
+export function ItemScreen({ item, whereName, canWrite, canManage = false }: { item: Item; whereName: string; canWrite: boolean; canManage?: boolean }) {
   const engine = useEngine();
   const app = useApp();
   const d = item.data;
@@ -158,6 +170,37 @@ export function ItemScreen({ item, whereName }: { item: Item; whereName: string 
   const report = (a: string) => engine.call("report", a, item.containerId, item.id).catch(() => undefined);
   useEffect(() => { engine.call<string | null>("effectiveTotp", item.id).then(setOtp).catch(() => undefined); }, [item.id]);
   const url = (u: string) => (/^https?:\/\//i.test(u) ? u : /^[a-z][a-z0-9+.-]*:/i.test(u) ? null : `https://${u}`);
+
+  const online = !engine.offline;
+  const editable = canWrite && !item.sharedBy && online;
+  const [atts, setAtts] = useState(item.attachments);
+  const addFile = async () => {
+    setError(null);
+    try {
+      const pick = await DocumentPicker.getDocumentAsync({ copyToCacheDirectory: true, multiple: false });
+      if (pick.canceled || !pick.assets[0]) return;
+      const a = pick.assets[0];
+      if ((a.size ?? 0) > 25 * 1024 * 1024) throw new Error("Dal telefono si possono caricare file fino a 25 MB.");
+      setBusyFile("upload");
+      const bytes = new File(a.uri).bytesSync();
+      let bin = "";
+      for (let i = 0; i < bytes.length; i += 0x8000) bin += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
+      await engine.call("addAttachment", item.id, btoa(bin), a.name, a.mimeType ?? "application/octet-stream");
+      const fresh = (await engine.call<Item[]>("items", item.containerId)).find((i) => i.id === item.id);
+      if (fresh) setAtts(fresh.attachments);
+      app.toast("Allegato cifrato e caricato");
+    } catch (e) {
+      setError(errorText(e));
+    } finally {
+      setBusyFile(null);
+    }
+  };
+  const removeFile = (attId: string, name: string) => Alert.alert(`Eliminare «${name}»?`, undefined, [
+    { text: "Annulla", style: "cancel" },
+    { text: "Elimina", style: "destructive", onPress: async () => {
+      try { await engine.call("deleteAttachment", attId); setAtts((x) => x.filter((a) => a.id !== attId)); } catch (e) { setError(errorText(e)); }
+    } },
+  ]);
 
   const openFile = async (attId: string) => {
     setBusyFile(attId);
@@ -181,7 +224,8 @@ export function ItemScreen({ item, whereName }: { item: Item; whereName: string 
 
   return (
     <View style={{ flex: 1 }}>
-      <Header title={d.name} subtitle={item.sharedBy ? `Condivisa da ${item.sharedBy}` : whereName} back />
+      <Header title={d.name} subtitle={item.sharedBy ? `Condivisa da ${item.sharedBy}` : whereName} back
+        action={canWrite && !item.sharedBy && !item.deletedAt && !engine.offline ? { label: "Modifica", onPress: () => app.push({ name: "edit", containerId: item.containerId, containerTitle: whereName, item }) } : undefined} />
       <ScrollView contentContainerStyle={{ padding: 16, gap: 16 }}>
         {(d.urls ?? []).map((u) => (
           <View key={u} style={st.fieldBox}>
@@ -206,6 +250,9 @@ export function ItemScreen({ item, whereName }: { item: Item; whereName: string 
           </View>
         ) : null}
         {otp && <OtpView uri={otp} onCopy={() => void report("item.totp_copy")} toast={app.toast} />}
+        {!otp && item.type === "login" && canWrite && !item.sharedBy && !engine.offline && (
+          <Button title="Aggiungi OTP" kind="secondary" onPress={() => app.push({ name: "edit", containerId: item.containerId, containerTitle: whereName, item })} />
+        )}
         {d.notes ? <View style={st.fieldBox}><Text style={st.fieldLabel}>Note</Text><Text style={st.fieldValue} selectable>{d.notes}</Text></View> : null}
         {(d.fields ?? []).filter((f) => !f.label.startsWith("TimeOtp-")).map((f) => (
           <View key={f.label} style={st.fieldBox}>
@@ -213,19 +260,32 @@ export function ItemScreen({ item, whereName }: { item: Item; whereName: string 
             <View style={st.fieldRow}><Text style={[st.fieldValue, { flex: 1 }]}>{f.secret ? "••••••••" : f.value}</Text><CopyButton value={f.value} toast={app.toast} /></View>
           </View>
         ))}
-        {item.attachments.length > 0 && (
+        {(atts.length > 0 || editable) && !item.deletedAt && (
           <View style={st.fieldBox}>
             <Text style={st.fieldLabel}>Allegati</Text>
-            {item.attachments.map((a) => (
+            {atts.map((a) => (
               <View key={a.id} style={st.fieldRow}>
                 <Text style={[st.fieldValue, { flex: 1 }]} numberOfLines={1}>{a.name}</Text>
                 <Button kind="secondary" title={busyFile === a.id ? "…" : "Apri"} busy={busyFile === a.id} onPress={() => openFile(a.id)} style={{ minHeight: 40, paddingHorizontal: 12 }} />
+                {editable && <Button kind="danger" title="✕" onPress={() => removeFile(a.id, a.name)} style={{ minHeight: 40, paddingHorizontal: 12 }} />}
               </View>
             ))}
+            {editable && <Button kind="secondary" title={busyFile === "upload" ? "Caricamento…" : "Aggiungi allegato"} busy={busyFile === "upload"} onPress={addFile} />}
+          </View>
+        )}
+        {item.deletedAt && editable && (
+          <Button title="Ripristina dal cestino" onPress={async () => {
+            try { await engine.call("restoreItem", item.id); app.toast("Elemento ripristinato"); app.pop(); } catch (e) { setError(errorText(e)); }
+          }} />
+        )}
+        {!item.sharedBy && !item.deletedAt && (
+          <View style={{ flexDirection: "row", gap: 8 }}>
+            <Button title="Cronologia" kind="secondary" onPress={() => app.push({ name: "history", item, where: whereName })} style={{ flex: 1 }} />
+            {canManage && online && <Button title={`Condividi solo questa${item.shares ? ` (${item.shares})` : ""}`} kind="secondary" onPress={() => app.push({ name: "itemShare", item })} style={{ flex: 1 }} />}
           </View>
         )}
         {error && <Notice kind="error">{error}</Notice>}
-        <Text style={st.rowSub}>Le modifiche si fanno dall'estensione per Chrome o Edge.</Text>
+        {item.sharedBy && <Text style={st.rowSub}>Password condivisa in sola lettura.</Text>}
       </ScrollView>
     </View>
   );
@@ -236,16 +296,16 @@ export function ItemScreen({ item, whereName }: { item: Item; whereName: string 
 export function SearchScreen() {
   const engine = useEngine();
   const app = useApp();
-  const [all, setAll] = useState<{ item: Item; where: string }[] | null>(null);
+  const [all, setAll] = useState<{ item: Item; where: string; canWrite: boolean }[] | null>(null);
   const [q, setQ] = useState("");
   useEffect(() => {
     (async () => {
-      const out: { item: Item; where: string }[] = [];
+      const out: { item: Item; where: string; canWrite: boolean }[] = [];
       for (const c of await engine.call<Container[]>("containers")) {
         if (c.kind === "org") continue;
-        for (const i of await engine.call<Item[]>("items", c.id)) out.push({ item: i, where: where(c) });
+        for (const i of await engine.call<Item[]>("items", c.id)) out.push({ item: i, where: where(c), canWrite: c.permission !== "read" });
       }
-      for (const i of await engine.call<Item[]>("sharedWithMe").catch(() => [] as Item[])) out.push({ item: i, where: `Condivisa da ${i.sharedBy}` });
+      for (const i of await engine.call<Item[]>("sharedWithMe").catch(() => [] as Item[])) out.push({ item: i, where: `Condivisa da ${i.sharedBy}`, canWrite: false });
       setAll(out);
     })().catch(() => setAll([]));
   }, []);
@@ -256,7 +316,7 @@ export function SearchScreen() {
       <Header title="Cerca" subtitle={all ? `${all.length} elementi, ricerca solo sul telefono` : "Decifratura…"} />
       <SearchBox value={q} onChange={setQ} placeholder="Nome, utente, sito, cliente…" />
       <FlatList data={res} keyExtractor={(r) => r.item.id} renderItem={({ item: r }) => (
-        <ItemRow item={r.item} subtitle={`${r.where}${r.item.data.username ? ` · ${r.item.data.username}` : ""}`} onPress={() => app.push({ name: "item", item: r.item, where: r.where })} />
+        <ItemRow item={r.item} subtitle={`${r.where}${r.item.data.username ? ` · ${r.item.data.username}` : ""}`} onPress={() => app.push({ name: "item", item: r.item, where: r.where, canWrite: r.canWrite })} />
       )} ListEmptyComponent={s && all ? <Text style={st.empty}>Nessun risultato.</Text> : null} />
     </View>
   );
@@ -272,7 +332,7 @@ export function SharedScreen() {
       <Header title="Condivise con te" subtitle="Password singole, in sola lettura" />
       {!items ? <ActivityIndicator style={{ marginTop: 32 }} color={color.accent} /> : (
         <FlatList data={items} keyExtractor={(i) => i.id} renderItem={({ item }) => (
-          <ItemRow item={item} subtitle={`da ${item.sharedBy}`} onPress={() => app.push({ name: "item", item, where: `Condivisa da ${item.sharedBy}` })} />
+          <ItemRow item={item} subtitle={`da ${item.sharedBy}`} onPress={() => app.push({ name: "item", item, where: `Condivisa da ${item.sharedBy}`, canWrite: false })} />
         )} ListEmptyComponent={<Text style={st.empty}>Nessuna password condivisa singolarmente con te.</Text>} />
       )}
     </View>
@@ -294,6 +354,7 @@ const st = StyleSheet.create({
   folder: { flexDirection: "row", alignItems: "center", gap: 6, paddingRight: 16, paddingVertical: 10, backgroundColor: color.ground, borderBottomWidth: 1, borderBottomColor: color.line, minHeight: 44 },
   folderText: { flex: 1, fontWeight: "600", color: color.ink2 },
   empty: { textAlign: "center", color: color.muted, padding: 32 },
+  action: { backgroundColor: color.accent, borderRadius: 8, paddingHorizontal: 12, paddingVertical: 8, minHeight: 36, justifyContent: "center" },
   fieldBox: { gap: 6, backgroundColor: color.surface, borderRadius: 12, borderWidth: 1, borderColor: color.line, padding: 12 },
   fieldLabel: { fontSize: 13, color: color.muted },
   fieldRow: { flexDirection: "row", alignItems: "center", gap: 8 },
