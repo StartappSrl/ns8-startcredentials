@@ -29,6 +29,8 @@ jobs:
 
       - name: SDK Android
         uses: android-actions/setup-android@v3
+        with:
+          packages: platform-tools
 
       - name: Pacchetti condivisi e motore crittografico
         run: |
