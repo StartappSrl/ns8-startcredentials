@@ -87,6 +87,9 @@ export function Clients({ vault, containers, reload, shared }: { vault: Vault; c
   const [q, setQ] = useState("");
   const [filter, setFilter] = useState<"all" | "manage" | "otp" | "recent">("all");
   const [creating, setCreating] = useState(false);
+  const [selecting, setSelecting] = useState(false);
+  const [picked, setPicked] = useState<Set<string>>(new Set());
+  const [bulk, setBulk] = useState(false);
   let list = containers.filter((c) => c.kind === "client" && (!shared || c.grantedBy !== vault.me.id));
   if (q) list = list.filter((c) => `${c.meta.name} ${c.meta.sector ?? ""}`.toLowerCase().includes(q.toLowerCase()));
   if (filter === "manage") list = list.filter((c) => c.permission === "manage");
@@ -100,8 +103,22 @@ export function Clients({ vault, containers, reload, shared }: { vault: Vault; c
           <input class="input" type="search" placeholder="Cerca clienti…" value={q} onInput={(e) => setQ(e.currentTarget.value)} />
         </label>
         <a class="btn" href="#/import">Importa</a>
+        {!shared && containers.some((c) => c.kind === "client" && c.permission === "manage") && !selecting && (
+          <button class="btn" onClick={() => setSelecting(true)}>Seleziona</button>
+        )}
         {!shared && vault.me.role === "admin" && <button class="btn primary" onClick={() => setCreating(true)}>Nuovo cliente</button>}
       </div>
+      {selecting && (
+        <div class="bulk-bar card" role="toolbar" aria-label="Azioni sui clienti selezionati">
+          <span class="grow" aria-live="polite"><b>{picked.size}</b> {picked.size === 1 ? "cliente selezionato" : "clienti selezionati"}</span>
+          <button class="btn sm ghost" onClick={() => setPicked(new Set(list.filter((c) => c.permission === "manage").map((c) => c.id)))}>
+            Seleziona tutti quelli che gestisci ({list.filter((c) => c.permission === "manage").length})
+          </button>
+          <button class="btn sm ghost" disabled={!picked.size} onClick={() => setPicked(new Set())}>Deseleziona</button>
+          <button class="btn sm primary" disabled={!picked.size} onClick={() => setBulk(true)}>Condividi o togli accesso</button>
+          <button class="btn sm" onClick={() => { setSelecting(false); setPicked(new Set()); }}>Fine</button>
+        </div>
+      )}
       <div class="row between">
         <div class="stack" style="gap:4px">
           <h1>{shared ? "Condivisi con me" : "Clienti"}</h1>
@@ -124,8 +141,15 @@ export function Clients({ vault, containers, reload, shared }: { vault: Vault; c
           {list.map((c) => {
             const t = tint(c.id);
             return (
-              <button class="client" onClick={() => go(`/c/${c.id}`)}>
+              <button class={`client${selecting && picked.has(c.id) ? " picked" : ""}`} aria-pressed={selecting ? picked.has(c.id) : undefined}
+                disabled={selecting && c.permission !== "manage"}
+                title={selecting && c.permission !== "manage" ? "Solo i gestori del cliente possono condividerlo" : undefined}
+                onClick={() => {
+                  if (!selecting) return go(`/c/${c.id}`);
+                  setPicked((prev) => { const n = new Set(prev); if (n.has(c.id)) n.delete(c.id); else n.add(c.id); return n; });
+                }}>
                 <div class="row" style="flex-wrap:nowrap">
+                  {selecting && <input type="checkbox" class="row-check" tabIndex={-1} checked={picked.has(c.id)} disabled={c.permission !== "manage"} aria-hidden="true" />}
                   <div class="mono-tile" style={`background:${t.bg};color:${t.fg}`}>{initials(c.meta.name)}</div>
                   <div class="grow">
                     <div class="ellipsis" style="font-weight:600;font-size:15px">{c.meta.name}</div>
@@ -145,7 +169,103 @@ export function Clients({ vault, containers, reload, shared }: { vault: Vault; c
         </div>
       )}
       {creating && <ContainerDialog vault={vault} onClose={() => setCreating(false)} onSaved={(id) => { setCreating(false); reload(); go(`/c/${id}`); }} />}
+      {bulk && (
+        <BulkShareDialog vault={vault} containers={containers.filter((c) => picked.has(c.id))}
+          onClose={(changed) => { setBulk(false); if (changed) { setSelecting(false); setPicked(new Set()); reload(); } }} />
+      )}
     </>
+  );
+}
+
+/** Condivisione (o revoca) di più clienti insieme con colleghi e gruppi. */
+function BulkShareDialog({ vault, containers, onClose }: { vault: Vault; containers: Container[]; onClose: (changed: boolean) => void }) {
+  const dir = useLoad(() => vault.directory(true), []);
+  const groups = useLoad(() => vault.groups(), []);
+  const [mode, setMode] = useState<"add" | "remove">("add");
+  const [users, setUsers] = useState<Set<string>>(new Set());
+  const [grps, setGrps] = useState<Set<string>>(new Set());
+  const [perm, setPerm] = useState<Permission>("read");
+  const [overwrite, setOverwrite] = useState(false);
+  const [progress, setProgress] = useState<string | null>(null);
+  const [result, setResult] = useState<{ done: number; unchanged: number; failed: { containerId: string; target: string; error: string }[] } | null>(null);
+  const { busy, error, run } = useAction();
+  const toggle = (set: Set<string>, setter: (s: Set<string>) => void, id: string) => { const n = new Set(set); if (n.has(id)) n.delete(id); else n.add(id); setter(n); };
+  const people = (dir.data ?? []).filter((u) => u.status === "active" && u.id !== vault.me.id);
+  const usable = (groups.data ?? []).filter((g) => g.verified && !g.rotationRequired);
+  const name = (id: string) => people.find((u) => u.id === id)?.displayName ?? usable.find((g) => g.id === id)?.name ?? id;
+  const cname = (id: string) => containers.find((c) => c.id === id)?.meta.name ?? id;
+
+  if (result) {
+    return (
+      <Dialog title={mode === "add" ? "Condivisione completata" : "Revoca completata"} onClose={() => onClose(true)}>
+        <div class="notice ok">
+          {mode === "add"
+            ? `${result.done} ${result.done === 1 ? "accesso concesso" : "accessi concessi"}`
+            : `${result.done} ${result.done === 1 ? "accesso tolto" : "accessi tolti"}, chiavi ruotate`} su {containers.length} {containers.length === 1 ? "cliente" : "clienti"}.
+          {result.unchanged ? ` ${result.unchanged} ${mode === "add" ? (result.unchanged === 1 ? "già presente (nessun declassamento)" : "già presenti (nessun declassamento)") : (result.unchanged === 1 ? "cliente senza nulla da togliere" : "clienti senza nulla da togliere")}.` : ""}
+        </div>
+        {result.failed.length > 0 && (
+          <div class="notice warn">
+            Non riusciti: {result.failed.map((f) => `${cname(f.containerId)}${f.target.includes(",") ? "" : ` – ${name(f.target)}`} (${f.error})`).join("; ")}.
+          </div>
+        )}
+        <div class="row" style="justify-content:flex-end"><button class="btn primary" onClick={() => onClose(true)}>Fatto</button></div>
+      </Dialog>
+    );
+  }
+  return (
+    <Dialog title={`${containers.length} ${containers.length === 1 ? "cliente selezionato" : "clienti selezionati"}`} onClose={() => onClose(false)} wide>
+      <div class="chips" role="group" aria-label="Operazione">
+        <button class={`chip${mode === "add" ? " on" : ""}`} aria-pressed={mode === "add"} onClick={() => setMode("add")}>Dai accesso</button>
+        <button class={`chip${mode === "remove" ? " on" : ""}`} aria-pressed={mode === "remove"} onClick={() => setMode("remove")}>Togli accesso</button>
+      </div>
+      <div class="small muted ellipsis">{containers.map((c) => c.meta.name).join(", ")}</div>
+      <div class="split" style="grid-template-columns:1fr 1fr">
+        <div class="card" style="max-height:260px;overflow:auto">
+          <div class="group-h"><span>Colleghi</span><span>{users.size}</span></div>
+          {people.map((u) => (
+            <label class="item-row" style="cursor:pointer">
+              <input type="checkbox" class="row-check" checked={users.has(u.id)} disabled={mode === "add" && !u.verified} onChange={() => toggle(users, setUsers, u.id)} />
+              <span class="grow"><span style="display:block;font-weight:500">{u.displayName}</span><span class="small muted">{u.email}{!u.verified ? " · chiave da certificare" : ""}</span></span>
+            </label>
+          ))}
+        </div>
+        <div class="card" style="max-height:260px;overflow:auto">
+          <div class="group-h"><span>Gruppi</span><span>{grps.size}</span></div>
+          {usable.length === 0 && <div class="small muted" style="padding:10px 14px">Nessun gruppo.</div>}
+          {usable.map((g) => (
+            <label class="item-row" style="cursor:pointer">
+              <input type="checkbox" class="row-check" checked={grps.has(g.id)} onChange={() => toggle(grps, setGrps, g.id)} />
+              <span class="grow"><span style="display:block;font-weight:500">{g.name}</span><span class="small muted">{g.members} {g.members === 1 ? "persona" : "persone"}</span></span>
+            </label>
+          ))}
+        </div>
+      </div>
+      {mode === "add" ? (
+        <div class="row" style="align-items:flex-end">
+          <label class="field">Permesso
+            <select class="input" value={perm} onChange={(e) => setPerm(e.currentTarget.value as Permission)}>
+              {(["read", "write", "manage"] as const).map((p) => <option value={p}>{PERM_LABEL[p]}</option>)}
+            </select>
+          </label>
+          <label class="check grow"><input type="checkbox" checked={overwrite} onChange={(e) => setOverwrite(e.currentTarget.checked)} />
+            Allinea anche chi ha già un permesso più alto (altrimenti resta com'è)</label>
+        </div>
+      ) : (
+        <div class="notice info">Ai clienti selezionati verrà tolto l'accesso dei colleghi e dei gruppi scelti; la chiave di ogni cliente coinvolto viene ruotata.</div>
+      )}
+      <ErrorNote error={error} />
+      <div class="row" style="justify-content:flex-end">
+        <button class="btn" onClick={() => onClose(false)}>Annulla</button>
+        <button class={`btn ${mode === "add" ? "primary" : "danger"}`} disabled={busy || (!users.size && !grps.size)} onClick={() => run(async () => {
+          const onProgress = (d: number, t: number) => setProgress(`${d} di ${t}`);
+          const to = { userIds: [...users], groupIds: [...grps] };
+          setResult(mode === "add" ? await vault.shareMany(containers.map((c) => c.id), to, perm, { overwrite, onProgress }) : await vault.revokeMany(containers.map((c) => c.id), to, { onProgress }));
+        })}>
+          {busy ? `Cifratura ${progress ?? "…"}` : mode === "add" ? `Dai accesso a ${containers.length} clienti` : `Togli accesso da ${containers.length} clienti`}
+        </button>
+      </div>
+    </Dialog>
   );
 }
 

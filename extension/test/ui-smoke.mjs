@@ -445,6 +445,32 @@ try {
   await waitFor(() => w.document.querySelector('[data-item]')?.textContent.includes("Microsoft 365") && w.document.querySelector('[data-item]').style.paddingLeft === "18px", "elemento fuori dalle cartelle");
   step("selezione multipla: cestino, ripristino e sposta in cartella");
 
+  // Più clienti insieme: condivisione con un gruppo e revoca.
+  await nav("#/clienti");
+  await waitFor(() => [...w.document.querySelectorAll(".client")].length >= 2, "elenco dei clienti");
+  await click("Seleziona");
+  await click("Seleziona tutti quelli che gestisci (2)");
+  await waitFor(() => w.document.querySelector(".bulk-bar b")?.textContent === "2", "2 clienti selezionati");
+  await click("Condividi o togli accesso");
+  await waitFor(() => [...w.document.querySelectorAll(".dialog label.item-row")].some((l) => l.textContent.includes("Tecnici")), "gruppo tra le scelte");
+  [...w.document.querySelectorAll(".dialog label.item-row")].find((l) => l.textContent.includes("Tecnici")).querySelector("input").dispatchEvent(new w.MouseEvent("click", { bubbles: true }));
+  await click("Dai accesso a 2 clienti");
+  await waitText("Condivisione completata", 60000);
+  // Il gruppo aveva già accesso allo Studio Legale Moretti: un accesso nuovo, uno invariato.
+  assert.ok(text().includes("1 accesso concesso su 2 clienti. 1 già presente (nessun declassamento)."), text().slice(-500));
+  await click("Fatto");
+  await click("Seleziona");
+  await click("Seleziona tutti quelli che gestisci (2)");
+  await click("Condividi o togli accesso");
+  [...w.document.querySelectorAll(".dialog .chip")].find((b) => b.textContent === "Togli accesso").dispatchEvent(new w.MouseEvent("click", { bubbles: true }));
+  await waitFor(() => [...w.document.querySelectorAll(".dialog label.item-row")].some((l) => l.textContent.includes("Tecnici")), "gruppo tra le scelte");
+  [...w.document.querySelectorAll(".dialog label.item-row")].find((l) => l.textContent.includes("Tecnici")).querySelector("input").dispatchEvent(new w.MouseEvent("click", { bubbles: true }));
+  await click("Togli accesso da 2 clienti");
+  await waitText("Revoca completata", 60000);
+  assert.ok(text().includes("2 accessi tolti, chiavi ruotate su 2 clienti."), text().slice(-500));
+  await click("Fatto");
+  step("più clienti insieme: condivisione con un gruppo e revoca con rotazione delle chiavi");
+
   await nav("#/admin/audit");
   await waitText("Registro attività");
   await click("Verifica integrità");

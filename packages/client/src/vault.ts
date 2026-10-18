@@ -1098,6 +1098,91 @@ export class Vault {
     await this.rotate(containerId);
   }
 
+  // ---------------------------------------------------------------- condivisione di più clienti
+
+  /**
+   * Dà accesso a più clienti insieme a colleghi e gruppi. Non declassa chi ha già
+   * un permesso più alto, salvo `overwrite`. Continua sugli altri clienti se uno
+   * fallisce e restituisce il dettaglio.
+   */
+  async shareMany(
+    containerIds: string[],
+    to: { userIds?: string[]; groupIds?: string[] },
+    permission: Permission,
+    opts: { overwrite?: boolean; onProgress?: (done: number, total: number) => void } = {},
+  ): Promise<{ done: number; unchanged: number; failed: { containerId: string; target: string; error: string }[] }> {
+    const RANK: Record<Permission, number> = { read: 1, write: 2, manage: 3 };
+    const users = to.userIds ?? [];
+    const groups = to.groupIds ?? [];
+    const total = containerIds.length * (users.length + groups.length);
+    const out = { done: 0, unchanged: 0, failed: [] as { containerId: string; target: string; error: string }[] };
+    let step = 0;
+    const tick = () => opts.onProgress?.(++step, total);
+    for (const cid of containerIds) {
+      let members: { userId: string; permission: Permission }[] = [];
+      let shared: { groupId: string; permission: Permission }[] = [];
+      try {
+        [members, shared] = await Promise.all([this.members(cid), this.containerGroups(cid)]);
+      } catch (e) {
+        for (const t of [...users, ...groups]) { out.failed.push({ containerId: cid, target: t, error: (e as Error).message }); tick(); }
+        continue;
+      }
+      for (const uid of users) {
+        try {
+          const cur = members.find((m) => m.userId === uid)?.permission;
+          if (cur && (cur === permission || (!opts.overwrite && RANK[cur] > RANK[permission]))) out.unchanged++;
+          else { await this.share(cid, uid, permission); out.done++; }
+        } catch (e) {
+          out.failed.push({ containerId: cid, target: uid, error: (e as Error).message });
+        }
+        tick();
+      }
+      for (const gid of groups) {
+        try {
+          const cur = shared.find((g) => g.groupId === gid)?.permission;
+          if (cur && (cur === permission || (!opts.overwrite && RANK[cur] > RANK[permission]))) out.unchanged++;
+          else { await this.shareWithGroup(cid, gid, permission); out.done++; }
+        } catch (e) {
+          out.failed.push({ containerId: cid, target: gid, error: (e as Error).message });
+        }
+        tick();
+      }
+    }
+    return out;
+  }
+
+  /** Toglie l'accesso a più clienti insieme; ogni cliente coinvolto ruota la sua chiave. */
+  async revokeMany(
+    containerIds: string[],
+    from: { userIds?: string[]; groupIds?: string[] },
+    opts: { onProgress?: (done: number, total: number) => void } = {},
+  ): Promise<{ done: number; unchanged: number; failed: { containerId: string; target: string; error: string }[] }> {
+    const users = from.userIds ?? [];
+    const groups = from.groupIds ?? [];
+    const out = { done: 0, unchanged: 0, failed: [] as { containerId: string; target: string; error: string }[] };
+    let step = 0;
+    const total = containerIds.length;
+    for (const cid of containerIds) {
+      try {
+        const [members, shared] = await Promise.all([this.members(cid), this.containerGroups(cid)]);
+        const u = users.filter((x) => members.some((m) => m.userId === x) && x !== this.me.id);
+        const g = groups.filter((x) => shared.some((y) => y.groupId === x));
+        if (!u.length && !g.length) out.unchanged++;
+        else {
+          // Prima tutte le rimozioni, poi una sola rotazione della chiave.
+          for (const x of u) await this.api.del(`/containers/${cid}/members/${x}`);
+          for (const x of g) await this.api.del(`/containers/${cid}/groups/${x}`);
+          await this.rotate(cid);
+          out.done += u.length + g.length;
+        }
+      } catch (e) {
+        out.failed.push({ containerId: cid, target: [...users, ...groups].join(","), error: (e as Error).message });
+      }
+      opts.onProgress?.(++step, total);
+    }
+    return out;
+  }
+
   // ---------------------------------------------------------------- condivisione di singoli elementi
 
   private sharedIks = new Map<string, Uint8Array>();

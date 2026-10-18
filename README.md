@@ -96,6 +96,9 @@ fatti dai colleghi. Export cifrato con gli allegati. Registro di audit con
 conservazione configurabile (`AUDIT_RETENTION_MONTHS`, predefinito 24 mesi)
 senza perdere la verificabilità della catena.
 
+Condivisione e revoca di più clienti insieme (colleghi e gruppi), senza
+declassare chi ha già un permesso più alto.
+
 Policy: i clienti li creano solo gli amministratori (anche tramite import);
 tutti hanno la propria area personale.
 
@@ -127,7 +130,7 @@ Serve Node.js 22 e un PostgreSQL di test (`TEST_DATABASE_URL`, predefinito `post
 npm ci
 npm test -w packages/crypto          # 16 test del core crittografico
 npm run build -w packages/client
-npm test -w app                      # 23 scenari end-to-end su server e database reali
+npm test -w app                      # 24 scenari end-to-end su server e database reali
 npm run build -w extension           # produce extension/startcredentials-extension.zip
 npm run test:ui -w extension         # 27 passaggi dell'interfaccia (jsdom + server reale)
 npm run test:import -w extension     # import con il pacchetto per browser (KeePass reale, CSV, 1Password)
@@ -139,7 +142,7 @@ npm run test:site -w extension       # riconoscimento dell'estensione sulla pagi
 
 ## Stato
 
-Versione 0.6.0. Fasi 0, 1 e 2 implementate e testate; l'app mobile (fase 3) non
+Versione 0.7.0. Fasi 0, 1 e 2 implementate e testate; l'app mobile (fase 3) non
 è ancora iniziata. Prima dell'uso in produzione servono un
 penetration test esterno e una revisione indipendente della crittografia.
 L'app mobile (fase 3) userà `packages/crypto` e `packages/client`.

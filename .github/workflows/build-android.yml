@@ -27,7 +27,8 @@ jobs:
           distribution: temurin
           java-version: 17
 
-      # L'Android SDK è già installato sui runner ubuntu-latest (ANDROID_HOME).
+      # L'Android SDK è già installato sui runner ubuntu-latest (ANDROID_HOME):
+      # Gradle scarica da solo piattaforme e build-tools mancanti.
 
       - name: Pacchetti condivisi e motore crittografico
         run: |

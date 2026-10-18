@@ -34,6 +34,8 @@ export interface Ctx {
   authLimiter: RateLimiter;
   keyLimiter: RateLimiter;
   apiLimiter: RateLimiter;
+  anonLimiter: RateLimiter;
+  ipCeiling: RateLimiter;
   /** Stati OPAQUE temporanei del login (scadono dopo 2 minuti). */
   pendingLogins: Map<string, { state: string; userId: string | null; email: string; expires: number }>;
 }
@@ -57,7 +59,12 @@ export async function buildApp(cfg: Config, db: Db, opts: { mailer?: Mailer } = 
     mailer: createMailer(cfg),
     authLimiter: new RateLimiter(cfg.authPerIpPerMinute ?? 30, 60_000),
     keyLimiter: new RateLimiter(cfg.authPerKeyPerMinute ?? 10, 60_000),
-    apiLimiter: new RateLimiter(600, 60_000),
+    // Per sessione autenticata (più utenti dietro lo stesso IP aziendale non si ostacolano)
+    // e per IP per le richieste anonime.
+    apiLimiter: new RateLimiter(cfg.apiPerMinute ?? 1200, 60_000),
+    anonLimiter: new RateLimiter(cfg.anonPerIpPerMinute ?? 600, 60_000),
+    // Tetto per IP su tutto il traffico: impedisce di aggirare i limiti con token inventati.
+    ipCeiling: new RateLimiter(cfg.ipCeilingPerMinute ?? 6000, 60_000),
     pendingLogins: new Map(),
   };
 
@@ -85,7 +92,10 @@ export async function buildApp(cfg: Config, db: Db, opts: { mailer?: Mailer } = 
   });
 
   app.addHook("onRequest", async (req) => {
-    ctx.apiLimiter.check(`ip:${req.ip}`);
+    ctx.ipCeiling.check(`ip:${req.ip}`);
+    const auth = req.headers.authorization;
+    if (auth?.startsWith("Bearer ")) ctx.apiLimiter.check(`tok:${auth.slice(7, 47)}`);
+    else ctx.anonLimiter.check(`ip:${req.ip}`);
     const h = req.headers.authorization;
     if (!h?.startsWith("Bearer ")) return;
     const r = await db.query(

@@ -26,6 +26,12 @@ export interface Config {
   authPerIpPerMinute?: number;
   /** Tentativi al minuto per singolo utente o codice (login, MFA, inviti). */
   authPerKeyPerMinute?: number;
+  /** Richieste API al minuto per sessione autenticata. */
+  apiPerMinute?: number;
+  /** Richieste al minuto per IP senza autenticazione. */
+  anonPerIpPerMinute?: number;
+  /** Tetto complessivo di richieste al minuto per IP. */
+  ipCeilingPerMinute?: number;
   smtp?: { host: string; port: number; user?: string; pass?: string; encryption: "tls" | "starttls" | "none"; tlsVerify: boolean; from: string };
 }
 

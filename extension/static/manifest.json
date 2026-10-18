@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "StartCredentials",
-  "version": "0.6.0",
+  "version": "0.7.0",
   "description": "Password e codici OTP dei clienti, cifrati sul tuo dispositivo e sincronizzati con il server StartCredentials della tua azienda.",
   "minimum_chrome_version": "127",
   "icons": {

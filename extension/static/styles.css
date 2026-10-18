@@ -205,3 +205,8 @@ body.inline-menu { background: var(--surface); width: 100%; min-height: 0; }
 .im-name { font-weight: 600; color: var(--ink); }
 .im-sub { color: var(--muted); font-size: 12px; }
 .im-empty { padding: 12px 10px; color: var(--muted); display: flex; flex-direction: column; gap: 8px; align-items: flex-start; }
+
+/* clienti selezionati */
+.client.picked { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent-line); }
+.client:disabled { opacity: .55; cursor: not-allowed; }
+.bulk-bar.card { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; padding: 10px 14px; background: var(--accent-soft); border-color: var(--accent-line); }

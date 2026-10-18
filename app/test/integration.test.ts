@@ -35,6 +35,9 @@ const cfg: Config = {
   authPerIpPerMinute: 10_000,
   trustedDeviceDays: 30,
   authPerKeyPerMinute: 10_000,
+  apiPerMinute: 100_000,
+  anonPerIpPerMinute: 100_000,
+  ipCeilingPerMinute: 100_000,
 };
 
 const api = (token?: string) => new Api({ baseUrl: base, token });
@@ -700,6 +703,46 @@ describe("StartCredentials end-to-end", () => {
     const t2 = await trustDevice(b, "PC di Paolo – Edge");
     await paolo.changePassword("paolo master password", "paolo password nuova", await mfaCode(paoloId), FAST);
     assert.equal((await login(api(), "paolo@azienda.it", "paolo password nuova", { deviceToken: t2.deviceToken })).state, "mfa_pending");
+  });
+
+  test("condivisione di più clienti insieme: colleghi e gruppi, nessun declassamento, revoca con rotazione", async () => {
+    const marco: Vault = state.marco;
+    await state.sara.refreshMe();
+    const paoloId = (await db.query("SELECT id FROM users WHERE email = 'paolo@azienda.it'")).rows[0].id;
+    const ids: string[] = [];
+    for (const n of ["Blocco Uno", "Blocco Due", "Blocco Tre"]) ids.push(await marco.createContainer({ name: n }));
+    await marco.share(ids[0]!, state.saraId, "manage");
+    await marco.share(ids[1]!, paoloId, "read");
+    const gid = await marco.createGroup("Squadra blocco");
+    const progress: number[] = [];
+    const r = await marco.shareMany(ids, { userIds: [state.saraId, paoloId], groupIds: [gid] }, "read", { onProgress: (d) => progress.push(d) });
+    assert.deepEqual(r.failed, []);
+    assert.equal(r.unchanged, 2, "Sara gestore su Uno e Paolo già lettore su Due restano come sono");
+    assert.equal(r.done, 7);
+    assert.equal(progress.at(-1), 9);
+    assert.equal((await marco.members(ids[0]!)).find((m) => m.userId === state.saraId)!.permission, "manage", "nessun declassamento");
+    for (const id of ids) {
+      assert.ok((await marco.members(id)).some((m) => m.userId === paoloId));
+      assert.equal((await marco.containerGroups(id)).length, 1);
+    }
+    // Con overwrite il permesso viene allineato a quello scelto.
+    await marco.shareMany([ids[0]!], { userIds: [state.saraId] }, "write", { overwrite: true });
+    assert.equal((await marco.members(ids[0]!)).find((m) => m.userId === state.saraId)!.permission, "write");
+
+    // Revoca in blocco: Paolo esce da tutti e tre, ogni chiave viene ruotata una volta.
+    const before: Record<string, number> = Object.fromEntries((await marco.containers()).filter((c) => ids.includes(c.id)).map((c) => [c.id, c.keyVersion]));
+    const rv = await marco.revokeMany(ids, { userIds: [paoloId] });
+    assert.deepEqual(rv.failed, []);
+    assert.equal(rv.done, 3);
+    for (const c of (await marco.containers()).filter((x) => ids.includes(x.id))) {
+      assert.equal(c.keyVersion, before[c.id]! + 1);
+      assert.ok(!(await marco.members(c.id)).some((m) => m.userId === paoloId));
+    }
+    // Un cliente su cui non si è gestori finisce tra gli errori, senza fermare gli altri.
+    const foreign = await (await signIn("sara@azienda.it", "nuova password di sara", state.saraId)).ensurePersonal();
+    const mixed = await marco.shareMany([foreign, ids[2]!], { userIds: [paoloId] }, "read");
+    assert.equal(mixed.failed.length, 1);
+    assert.equal(mixed.done, 1);
   });
 
   test("intestazioni di sicurezza: CSP senza eccezioni e cache corretta (rilievi del vulnerability assessment)", async () => {
