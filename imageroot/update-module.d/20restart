@@ -7,10 +7,15 @@
 # Dopo update-module: ricarica le unità systemd aggiornate e riavvia il pod,
 # così app e database ripartono con le immagini nuove. Le migrazioni del
 # database vengono applicate dall'app all'avvio.
+# Se un aggiornamento precedente aveva lasciato il modulo fermo, i tentativi
+# falliti vengono azzerati e il modulo viene avviato comunque.
 #
 
 exec 1>&2
 set -e
 
 systemctl --user daemon-reload
-systemctl --user try-restart startcredentials.service
+systemctl --user reset-failed 'startcredentials*' || :
+if systemctl --user is-enabled --quiet startcredentials.service; then
+    systemctl --user restart startcredentials.service
+fi
