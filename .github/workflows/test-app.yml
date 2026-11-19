@@ -43,3 +43,42 @@ jobs:
           path: extension/startcredentials-extension.zip
       - name: Motore dell'app Android
         run: node mobile/scripts/build-engine.mjs && node mobile/engine/engine.test.mjs
+
+  # L'immagine vera, costruita dal Containerfile e avviata contro PostgreSQL:
+  # intercetta file o librerie che mancano nell'immagine ma non nei test.
+  immagine:
+    runs-on: ubuntu-24.04
+    services:
+      postgres:
+        image: docker.io/library/postgres:16.15-alpine
+        env:
+          POSTGRES_USER: sc
+          POSTGRES_PASSWORD: sc
+          POSTGRES_DB: sc
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U sc" --health-interval 5s --health-timeout 5s --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: Costruzione dell'immagine
+        run: docker build -f app/Containerfile -t sc-app:prova .
+      - name: Avvio e verifiche
+        run: |
+          docker run -d --name sc --network host \
+            -e NODE_ENV=production -e PORT=18080 \
+            -e DATABASE_URL=postgres://sc:sc@127.0.0.1:5432/sc \
+            -e SERVER_SECRET=$(head -c32 /dev/urandom | base64) \
+            -e BOOTSTRAP_TOKEN=prova-avvio-0123456789 \
+            -e STARTCREDENTIALS_HOST=prova.example.org \
+            -e ATTACHMENTS_DIR=/tmp/att \
+            -e MIN_PASSWORD_LENGTH= -e SECURE_SEND_ENABLED= -e SECURE_SEND_MAX_DAYS= -e SECURE_SEND_DOMAINS= \
+            --tmpfs /tmp sc-app:prova
+          for i in $(seq 1 30); do curl -sf localhost:18080/api/v1/version && break; sleep 2; done
+          echo
+          docker logs sc
+          curl -sf localhost:18080/api/v1/version | grep -q '"version"'
+          curl -sf -o /dev/null localhost:18080/s
+          curl -sf -o /dev/null "localhost:18080/send.js?v=x"
+          curl -sf -o /dev/null localhost:18080/privacy
+          curl -sf -o /dev/null localhost:18080/download/startcredentials-extension.zip
+          echo "Immagine avviata e pagine raggiungibili."

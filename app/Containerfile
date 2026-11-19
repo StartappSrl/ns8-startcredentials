@@ -15,12 +15,18 @@ RUN npm run build -w packages/crypto \
  && npm run build -w packages/client \
  && npm run build -w extension \
  && npx tsc -p app/tsconfig.build.json \
- && npm prune --omit=dev --no-audit --no-fund
+ && npm prune --omit=dev --no-audit --no-fund \
+ && mkdir -p app/node_modules packages/crypto/node_modules packages/client/node_modules
 
 FROM docker.io/library/node:22.23.4-bookworm-slim
 ENV NODE_ENV=production PORT=8080
 WORKDIR /srv/startcredentials
 COPY --from=build /src/node_modules ./node_modules
+# npm può installare versioni proprie del server o dei pacchetti nelle loro cartelle:
+# vanno copiate anche quelle, altrimenti il server non trova le sue librerie.
+COPY --from=build /src/app/node_modules app/node_modules
+COPY --from=build /src/packages/crypto/node_modules packages/crypto/node_modules
+COPY --from=build /src/packages/client/node_modules packages/client/node_modules
 COPY --from=build /src/packages/crypto/package.json packages/crypto/package.json
 COPY --from=build /src/packages/crypto/dist packages/crypto/dist
 COPY --from=build /src/packages/client/package.json packages/client/package.json
