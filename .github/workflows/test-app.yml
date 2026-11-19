@@ -37,7 +37,7 @@ jobs:
         run: npm test -w app
       - name: Estensione (build e test di fumo dell'interfaccia)
         run: npm run build -w extension && npm run test:ui -w extension && npm run test:import -w extension && npm run test:inline -w extension && npm run test:popup -w extension && npm run test:send -w extension && npm run test:site -w extension
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: startcredentials-extension
           path: extension/startcredentials-extension.zip
