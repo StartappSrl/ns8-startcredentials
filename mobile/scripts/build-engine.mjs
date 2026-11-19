@@ -1,12 +1,14 @@
 // Impacchetta il motore (SDK + libsodium + OPAQUE) in un'unica pagina HTML per la WebView.
 // Si esegue dalla radice del monorepo: node mobile/scripts/build-engine.mjs
-import { build } from "esbuild";
 import { writeFileSync, mkdirSync } from "node:fs";
+import { createRequire } from "node:module";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { nodeStubs } from "../../extension/node-stubs.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
+// esbuild è una dipendenza dell'estensione: lo carichiamo da lì, ovunque npm lo installi.
+const { build } = createRequire(join(here, "../../extension/package.json"))("esbuild");
 const r = await build({
   entryPoints: [join(here, "../engine/engine.ts")],
   bundle: true, write: false, format: "iife", platform: "browser", target: "chrome100",

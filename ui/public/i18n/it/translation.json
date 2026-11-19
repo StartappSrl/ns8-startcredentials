@@ -34,7 +34,15 @@
     "instance_url": "Apri StartCredentials",
     "mail_from": "Indirizzo mittente",
     "mail_from_helper": "Indirizzo usato per gli inviti. Lascia vuoto per usare l'account dello smarthost: molti provider rifiutano mittenti diversi.",
-    "format": "Formato non valido"
+    "format": "Formato non valido",
+    "app_version": "Versione dell'applicazione",
+    "min_password_length": "Lunghezza minima della master password",
+    "min_password_length_helper": "Da 12 a 64 caratteri. La applicano estensione e app a registrazione, cambio e recupero: il server non vede mai la password.",
+    "secure_send": "Invio sicuro di credenziali",
+    "secure_send_helper": "Permette di inviare una credenziale a un destinatario esterno: collegamento per email, codice di accesso comunicato a parte, contenuto cifrato e distrutto dopo l'apertura.",
+    "secure_send_max_days": "Durata massima di un invio (giorni)",
+    "secure_send_domains": "Domini ammessi per i destinatari",
+    "secure_send_domains_helper": "Separati da virgola. Vuoto: qualsiasi dominio. Sono ammessi anche i sottodomini."
   },
   "error": {
     "error": "Errore",

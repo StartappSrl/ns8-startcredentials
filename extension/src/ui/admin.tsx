@@ -1,9 +1,8 @@
 import { useState } from "preact/hooks";
 import {
-  ApiError, ClientImportSummary, Container, effectiveTotpUri, generatePassword, import1Password, importAsClients, importBitwarden, importCsv, importInto,
-  importKeePass, ImportResult, importStartCredentials, planClientImport, Vault,
+  ApiError, ClientImportSummary, Container, effectiveTotpUri, generatePassword, import1Password, importAsClients, importBitwarden, importCsv, importInto, importKeePass, ImportResult, importStartCredentials, passwordPolicy, planClientImport, Vault,
 } from "@startcredentials/client";
-import { disableInlineIcon, download, enableInlineIcon, getSettings, initials, lock, saveSettings, signOut, storeVault } from "../shared";
+import { disableInlineIcon, download, enableInlineIcon, getSettings, initials, loadVersions, lock, saveSettings, signOut, storeVault } from "../shared";
 import { BackupCodes } from "./auth";
 import { CopyButton, Dialog, ErrorNote, Meter, useAction, useLoad, useToast } from "./kit";
 import { go } from "./vault";
@@ -212,26 +211,40 @@ function CertifyDialog({ vault, user, onClose }: { vault: Vault; user: AdminUser
 
 function RecoveryDialog({ vault, user, onClose }: { vault: Vault; user: AdminUser; onClose: () => void }) {
   const [shares, setShares] = useState("");
-  const [res, setRes] = useState<{ recoveryUrl: string; code: string } | null>(null);
+  // Destinatari del collegamento: indirizzo dell'account e indirizzo di recupero, se l'utente l'ha indicato.
+  const [to1, setTo1] = useState(user.email);
+  const [to2, setTo2] = useState(user.recoveryEmail ?? "");
+  const [res, setRes] = useState<{ recoveryUrl: string; code: string; emailed: string[]; emailFailed: string[] } | null>(null);
   const { busy, error, run } = useAction();
   return (
     <Dialog title={`Recupero account di ${user.displayName}`} onClose={onClose}>
       {res ? (
         <div class="stack">
-          <label class="field">Collegamento di recupero (valido 24 ore): invialo all'utente
+          {res.emailed.length > 0 && <div class="notice ok">Collegamento inviato per email a {res.emailed.join(" e ")}.</div>}
+          {res.emailFailed.length > 0 && <div class="notice warn">Invio non riuscito a {res.emailFailed.join(" e ")}: invia il collegamento a mano.</div>}
+          <label class="field">Collegamento di recupero (valido 24 ore){res.emailed.length ? ", per l'invio manuale se serve" : ": invialo all'utente"}
             <div class="input-group"><input class="input mono" readOnly value={res.recoveryUrl} /><CopyButton value={res.recoveryUrl} /></div>
           </label>
-          <label class="field">Codice di recupero: comunicalo a voce o per un canale diverso dal collegamento
+          <label class="field">Codice di recupero: comunicalo a voce o per un canale diverso dall'email. Non viene mai inviato per email.
             <div class="share-box" style="font-size:16px;letter-spacing:1px">{res.code}</div>
           </label>
           <div class="row" style="justify-content:flex-end"><button class="btn primary" onClick={onClose}>Fatto</button></div>
         </div>
       ) : (
-        <form class="stack" onSubmit={(e) => { e.preventDefault(); run(async () => setRes(await vault.startRecovery(user.id, shares.split(/\s+/).filter(Boolean)))); }}>
+        <form class="stack" onSubmit={(e) => {
+          e.preventDefault();
+          run(async () => setRes(await vault.startRecovery(user.id, shares.split(/\s+/).filter(Boolean), undefined, { sendTo: [to1, to2].map((x) => x.trim()).filter(Boolean) })));
+        }}>
           <p>Servono le quote di recupero stampate all'inizializzazione, almeno quante indicate nella pagina Organizzazione. Ogni custode incolla o digita la propria quota.</p>
           <label class="field">Quote di recupero (una per riga)
             <textarea class="input mono" required value={shares} onInput={(e) => setShares(e.currentTarget.value)} placeholder="SCR1-…" />
           </label>
+          <fieldset class="stack" style="border:0;padding:0;margin:0;gap:8px">
+            <legend class="small muted" style="margin-bottom:6px">Invia il collegamento per email (lascia vuoto per inviarlo a mano)</legend>
+            <label class="field">Primo indirizzo<input class="input" type="email" value={to1} onInput={(e) => setTo1(e.currentTarget.value)} /></label>
+            <label class="field">Secondo indirizzo (facoltativo)<input class="input" type="email" value={to2} placeholder="es. indirizzo personale" onInput={(e) => setTo2(e.currentTarget.value)} /></label>
+            <p class="small muted">Se il collegamento non va all'indirizzo dell'account ({user.email}), quell'indirizzo riceve comunque un avviso.</p>
+          </fieldset>
           <ErrorNote error={error} />
           <div class="row" style="justify-content:flex-end">
             <button type="button" class="btn" onClick={onClose}>Annulla</button>
@@ -662,6 +675,8 @@ export function SettingsPage({ vault }: { vault: Vault }) {
         <p class="muted">Leggila all'amministratore quando deve certificare la tua chiave.</p>
         <div class="share-box" style="font-size:16px;letter-spacing:1px">{vault.myFingerprint}</div>
       </div>
+      <VersionCard />
+      <SecureSendsCard vault={vault} />
       <AccountSecurity vault={vault} />
       <div class="card pad stack" style="max-width:640px">
         <h3>Sicurezza</h3>
@@ -729,6 +744,7 @@ function AccountSecurity({ vault }: { vault: Vault }) {
         <button class="btn" onClick={() => setDialog("codes")}>Genera nuovi codici</button>
       </div>
       {mfa.data && mfa.data.backupCodesRemaining < 3 && <div class="notice warn">Ti restano pochi codici di riserva: generane di nuovi.</div>}
+      <RecoveryEmail vault={vault} />
       <div class="row between">
         <div><div style="font-weight:500">Export cifrato</div><div class="small muted">Copia di tutto ciò che puoi leggere, allegati compresi, protetta da una passphrase.</div></div>
         <button class="btn" onClick={() => setDialog("export")}>Esporta</button>
@@ -742,6 +758,8 @@ function AccountSecurity({ vault }: { vault: Vault }) {
 }
 
 function ChangePasswordDialog({ vault, onClose }: { vault: Vault; onClose: () => void }) {
+  const policy = useLoad(() => passwordPolicy(vault.api), []);
+  const minLen = policy.data?.minPasswordLength ?? 12;
   const [current, setCurrent] = useState("");
   const [pw, setPw] = useState("");
   const [pw2, setPw2] = useState("");
@@ -760,13 +778,13 @@ function ChangePasswordDialog({ vault, onClose }: { vault: Vault; onClose: () =>
     <Dialog title="Cambia la master password" onClose={onClose}>
       <form class="stack" onSubmit={(e) => {
         e.preventDefault();
-        if ([...pw].length < 12) return setError("La nuova master password deve avere almeno 12 caratteri.");
+        if ([...pw].length < minLen) return setError(`La nuova master password deve avere almeno ${minLen} caratteri.`);
         if (pw !== pw2) return setError("Le due password non coincidono.");
         if (pw === current) return setError("La nuova password deve essere diversa da quella attuale.");
         run(async () => { await vault.changePassword(current, pw, code.trim()); setDone(true); });
       }}>
         <label class="field">Master password attuale<input class="input" type="password" autoComplete="current-password" required autoFocus value={current} onInput={(e) => setCurrent(e.currentTarget.value)} /></label>
-        <label class="field">Nuova master password<input class="input" type="password" autoComplete="new-password" required minLength={12} value={pw} onInput={(e) => setPw(e.currentTarget.value)} /></label>
+        <label class="field">Nuova master password (almeno {minLen} caratteri)<input class="input" type="password" autoComplete="new-password" required minLength={minLen} value={pw} onInput={(e) => setPw(e.currentTarget.value)} /></label>
         <Meter value={pw} />
         <label class="field">Ripeti la nuova master password<input class="input" type="password" autoComplete="new-password" required value={pw2} onInput={(e) => setPw2(e.currentTarget.value)} /></label>
         <label class="field">Codice MFA (o codice di riserva)<input class="input mono" autoComplete="one-time-code" required value={code} onInput={(e) => setCode(e.currentTarget.value)} /></label>
@@ -867,6 +885,70 @@ function TrustedDevices({ vault }: { vault: Vault }) {
             if (d.id === mine.data) await chrome.storage.local.remove("deviceTrust");
             list.reload();
           })}>Revoca</button>
+        </div>
+      ))}
+      <ErrorNote error={error} />
+    </div>
+  );
+}
+
+function VersionCard() {
+  const v = useLoad(() => loadVersions(), []);
+  return (
+    <div class="card pad stack" style="max-width:640px">
+      <h3>Versione</h3>
+      <div class="row between"><span>Estensione</span><span class="mono">{v.data?.extension ?? "…"}</span></div>
+      <div class="row between"><span>Server</span><span class="mono">{v.data ? v.data.server ?? "non raggiungibile" : "…"}</span></div>
+      {v.data?.mismatch && (
+        <div class="notice warn">Estensione e server hanno versioni diverse. Scarica di nuovo l'estensione dal server (o attendi l'aggiornamento automatico dallo store) e ricaricala.</div>
+      )}
+    </div>
+  );
+}
+
+/** Indirizzo secondario per ricevere il collegamento di recupero dell'account. */
+function RecoveryEmail({ vault }: { vault: Vault }) {
+  const [value, setValue] = useState(vault.me.recoveryEmail ?? "");
+  const [saved, setSaved] = useState(vault.me.recoveryEmail ?? "");
+  const { busy, error, run } = useAction();
+  const toast = useToast();
+  return (
+    <div class="stack" style="gap:8px">
+      <div><div style="font-weight:500">Email di recupero</div>
+        <div class="small muted">Se dimentichi la master password, gli amministratori possono inviare il collegamento di recupero anche qui (per esempio a un indirizzo personale). Il codice ti verrà comunque comunicato a voce.</div></div>
+      <div class="input-group">
+        <input class="input" type="email" aria-label="Email di recupero" placeholder="nome@esempio.it" value={value} onInput={(e) => setValue(e.currentTarget.value)} />
+        <button class="btn" disabled={busy || value.trim() === saved} onClick={() => run(async () => {
+          const r = await vault.setRecoveryEmail(value.trim() || null);
+          setSaved(r ?? "");
+          setValue(r ?? "");
+          toast(r ? "Email di recupero salvata" : "Email di recupero rimossa");
+        })}>Salva</button>
+      </div>
+      <ErrorNote error={error} />
+    </div>
+  );
+}
+
+const SEND_STATUS: Record<string, string> = { active: "Attivo", consumed: "Aperto", expired: "Scaduto", revoked: "Revocato" };
+
+/** Invii sicuri creati dall'utente: stato, aperture, revoca. */
+function SecureSendsCard({ vault }: { vault: Vault }) {
+  const [tick, setTick] = useState(0);
+  const list = useLoad(() => vault.secureSends(), [tick]);
+  const { busy, error, run } = useAction();
+  if (!list.data?.length) return null;
+  return (
+    <div class="card pad stack" style="max-width:640px">
+      <h3>Invii sicuri</h3>
+      <div class="small muted">Credenziali inviate a destinatari esterni. Un invio attivo si può revocare: il contenuto cifrato viene cancellato subito.</div>
+      {list.data.slice(0, 30).map((s) => (
+        <div class="row between" style="align-items:center">
+          <div>
+            <div style="font-weight:500">{s.recipientEmail}</div>
+            <div class="small muted">{SEND_STATUS[s.status]} · aperto {s.views} di {s.maxViews} · {s.status === "active" ? `scade ${new Date(s.expiresAt).toLocaleString("it-IT")}` : `creato ${new Date(s.createdAt).toLocaleString("it-IT")}`}</div>
+          </div>
+          {s.status === "active" && <button class="btn sm ghost danger" disabled={busy} onClick={() => run(async () => { await vault.revokeSecureSend(s.id); setTick((t) => t + 1); })}>Revoca</button>}
         </div>
       ))}
       <ErrorNote error={error} />

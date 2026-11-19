@@ -18,6 +18,10 @@ export interface Config {
   port: number;
   maxAttachmentBytes: number;
   sessionHours: number;
+  /** Invii sicuri di credenziali via email: attivi, durata massima in ore, domini ammessi (vuoto = tutti). */
+  secureSend?: { enabled: boolean; maxHours: number; domains: string[] };
+  /** Lunghezza minima della master password (applicata dai client: il server non la vede mai). */
+  minPasswordLength?: number;
   /** Giorni di validità di un dispositivo attendibile (0 = funzione disattivata). */
   trustedDeviceDays?: number;
   /** Mesi di conservazione del registro di audit (0 = senza limite). */
@@ -55,6 +59,12 @@ export function loadConfig(env = process.env): Config {
     sessionHours: Number(env.SESSION_HOURS ?? 12),
     auditRetentionMonths: Number(env.AUDIT_RETENTION_MONTHS ?? 24),
     trustedDeviceDays: Math.max(0, Math.min(90, Number(env.TRUSTED_DEVICE_DAYS ?? 30))),
+    minPasswordLength: Math.max(12, Math.min(64, Number(env.MIN_PASSWORD_LENGTH) || 12)),
+    secureSend: {
+      enabled: (env.SECURE_SEND_ENABLED ?? "1") !== "0",
+      maxHours: Math.max(1, Math.min(30, Number(env.SECURE_SEND_MAX_DAYS) || 7)) * 24,
+      domains: (env.SECURE_SEND_DOMAINS ?? "").split(/[\s,;]+/).map((d) => d.trim().toLowerCase().replace(/^@/, "")).filter(Boolean),
+    },
     authPerIpPerMinute: Number(env.AUTH_RATE_LIMIT ?? 30),
     authPerKeyPerMinute: 10,
     // Variabili prodotte da discover-smarthost di NethServer 8.

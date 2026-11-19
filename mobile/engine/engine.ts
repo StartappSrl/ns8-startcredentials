@@ -8,7 +8,7 @@
  */
 import {
   Api, ApiError, effectiveTotpUri, enableMfa, generatePassword, Item, ItemData, KEEPASS_TOTP_FIELDS, login, logout, passwordHealth,
-  Permission, ready, register, SecurityError, serverStatus, SerializedSession, setupMfa, trustDevice, Vault, verifyMfa,
+  passwordPolicy, Permission, ready, register, SecurityError, serverStatus, SerializedSession, setupMfa, trustDevice, Vault, verifyMfa,
 } from "@startcredentials/client";
 
 type Msg =
@@ -90,6 +90,8 @@ const methods: Record<string, (...args: never[]) => unknown> = {
     return { ok: true };
   },
   status: async () => serverStatus(needApi()),
+  /** Lunghezza minima della master password decisa dall'azienda. */
+  passwordPolicy: async () => passwordPolicy(needApi()),
   setToken(token: string | null) { needApi().token = token ?? undefined; return true; },
   async login(email: string, password: string, deviceToken?: string) {
     const r = await login(needApi(), email, password, { deviceToken: deviceToken || undefined });
@@ -201,6 +203,7 @@ const methods: Record<string, (...args: never[]) => unknown> = {
 
   changePassword: async (current: string, next: string, code: string) => { await needVault().changePassword(current, next, code); return true; },
   mfaStatus: async () => needVault().mfaStatus(),
+  setRecoveryEmail: async (email: string | null) => needVault().setRecoveryEmail(email),
   regenerateBackupCodes: async (code: string) => needVault().regenerateBackupCodes(code),
   /** Rapporto sulla salute delle password, calcolato qui: all'app vanno solo nomi e motivi. */
   async health() {

@@ -85,6 +85,11 @@ export async function authRoutes(app: FastifyInstance, ctx: Ctx) {
   app.get("/api/v1/auth/status", async () => ({
     bootstrapped: (await getSetting(db, "bootstrap_used")) === "1",
     org: await orgPublic(db),
+    // Regola pubblicata: la applicano estensione e app, perché il server non vede mai la password.
+    policy: {
+      minPasswordLength: cfg.minPasswordLength ?? 12,
+      secureSend: cfg.secureSend ?? { enabled: true, maxHours: 168, domains: [] },
+    },
   }));
 
   // ------------------------------------------------------------ registrazione

@@ -1,6 +1,6 @@
 # Immagine dell'applicazione StartCredentials (contesto: radice del repository).
 
-FROM docker.io/library/node:22.12.0-bookworm-slim AS build
+FROM docker.io/library/node:22.23.4-bookworm-slim AS build
 WORKDIR /src
 COPY package.json package-lock.json ./
 COPY packages/crypto/package.json packages/crypto/
@@ -17,7 +17,7 @@ RUN npm run build -w packages/crypto \
  && npx tsc -p app/tsconfig.build.json \
  && npm prune --omit=dev --no-audit --no-fund
 
-FROM docker.io/library/node:22.12.0-bookworm-slim
+FROM docker.io/library/node:22.23.4-bookworm-slim
 ENV NODE_ENV=production PORT=8080
 WORKDIR /srv/startcredentials
 COPY --from=build /src/node_modules ./node_modules

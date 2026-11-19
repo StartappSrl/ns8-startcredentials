@@ -26,6 +26,22 @@
         },
         "mail_from": {
             "type": "string"
+        },
+        "app_version": {
+            "type": "string",
+            "description": "Versione dell'applicazione in uso"
+        },
+        "min_password_length": {
+            "type": "integer"
+        },
+        "secure_send_enabled": {
+            "type": "boolean"
+        },
+        "secure_send_max_days": {
+            "type": "integer"
+        },
+        "secure_send_domains": {
+            "type": "string"
         }
     }
 }

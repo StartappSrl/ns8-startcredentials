@@ -37,6 +37,26 @@
                     "maxLength": 0
                 }
             ]
+        },
+        "min_password_length": {
+            "type": "integer",
+            "minimum": 12,
+            "maximum": 64,
+            "description": "Lunghezza minima della master password"
+        },
+        "secure_send_enabled": {
+            "type": "boolean",
+            "description": "Invio sicuro di credenziali via email"
+        },
+        "secure_send_max_days": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 30
+        },
+        "secure_send_domains": {
+            "type": "string",
+            "maxLength": 2000,
+            "pattern": "^[A-Za-z0-9.,;@\\s-]*$"
         }
     },
     "additionalProperties": false

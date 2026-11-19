@@ -24,6 +24,10 @@ response = agent.tasks.run(
         "host": host,
         "lets_encrypt": (env.get("STARTCREDENTIALS_LETS_ENCRYPT") or os.environ.get("STARTCREDENTIALS_LETS_ENCRYPT")) == "true",
         "mail_from": env.get("STARTCREDENTIALS_MAIL_FROM") or os.environ.get("STARTCREDENTIALS_MAIL_FROM", ""),
+        "min_password_length": int(env.get("STARTCREDENTIALS_MIN_PASSWORD_LENGTH") or os.environ.get("STARTCREDENTIALS_MIN_PASSWORD_LENGTH") or 12),
+        "secure_send_enabled": (env.get("STARTCREDENTIALS_SECURE_SEND_ENABLED") or os.environ.get("STARTCREDENTIALS_SECURE_SEND_ENABLED") or "1") != "0",
+        "secure_send_max_days": int(env.get("STARTCREDENTIALS_SECURE_SEND_MAX_DAYS") or os.environ.get("STARTCREDENTIALS_SECURE_SEND_MAX_DAYS") or 7),
+        "secure_send_domains": ", ".join((env.get("STARTCREDENTIALS_SECURE_SEND_DOMAINS") or os.environ.get("STARTCREDENTIALS_SECURE_SEND_DOMAINS") or "").split()),
     },
 )
 agent.assert_exp(response["exit_code"] == 0)

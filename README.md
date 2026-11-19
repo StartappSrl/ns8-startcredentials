@@ -26,6 +26,10 @@ api-cli run module/startcredentials1/configure-module --data '{"host": "credenzi
 Il modulo avvia un pod rootless con l'applicazione e PostgreSQL, pubblica
 l'host tramite Traefik solo in HTTPS e usa lo smarthost del cluster per gli inviti.
 
+Opzionale: `"min_password_length": 16` (da 12 a 64) fissa la lunghezza minima
+della master password; la applicano estensione e app, perché il server non
+vede mai la password.
+
 Opzionale: `"mail_from": "credenziali@tuodominio.it"` imposta il mittente degli
 inviti. Se vuoto si usa l'account dello smarthost del cluster (Impostazioni →
 Smarthost), che è anche la scelta più sicura con Microsoft 365 e Gmail.
@@ -96,6 +100,10 @@ fatti dai colleghi. Export cifrato con gli allegati. Registro di audit con
 conservazione configurabile (`AUDIT_RETENTION_MONTHS`, predefinito 24 mesi)
 senza perdere la verificabilità della catena.
 
+Invio sicuro di credenziali a destinatari esterni: cifratura nel browser,
+collegamento per email, codice di accesso comunicato a parte, contenuto
+distrutto dopo l'apertura (pagina pubblica /s, test: npm run test:send -w extension).
+
 Condivisione e revoca di più clienti insieme (colleghi e gruppi), senza
 declassare chi ha già un permesso più alto.
 
@@ -130,7 +138,7 @@ Serve Node.js 22 e un PostgreSQL di test (`TEST_DATABASE_URL`, predefinito `post
 npm ci
 npm test -w packages/crypto          # 16 test del core crittografico
 npm run build -w packages/client
-npm test -w app                      # 24 scenari end-to-end su server e database reali
+npm test -w app                      # 26 scenari e invio email reale end-to-end su server e database reali
 npm run build -w extension           # produce extension/startcredentials-extension.zip
 npm run test:ui -w extension         # 27 passaggi dell'interfaccia (jsdom + server reale)
 npm run test:import -w extension     # import con il pacchetto per browser (KeePass reale, CSV, 1Password)
@@ -142,7 +150,7 @@ npm run test:site -w extension       # riconoscimento dell'estensione sulla pagi
 
 ## Stato
 
-Versione 0.7.0. Fasi 0, 1 e 2 implementate e testate; l'app mobile (fase 3) non
+Versione 0.7.6. Fasi 0, 1 e 2 implementate e testate; l'app mobile (fase 3) non
 è ancora iniziata. Prima dell'uso in produzione servono un
 penetration test esterno e una revisione indipendente della crittografia.
 L'app mobile (fase 3) userà `packages/crypto` e `packages/client`.

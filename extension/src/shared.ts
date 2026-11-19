@@ -272,3 +272,25 @@ export function deviceName(): string {
   const os = /Windows/.test(ua) ? "Windows" : /Mac OS X/.test(ua) ? "macOS" : /Linux/.test(ua) ? "Linux" : "dispositivo";
   return `${browser} su ${os}`;
 }
+
+// ------------------------------------------------------------------ versioni
+
+export interface Versions { extension: string; server: string | null; mismatch: boolean }
+
+/** Versione dell'estensione (manifest) e del server (indirizzo pubblico /api/v1/version). */
+export async function loadVersions(): Promise<Versions> {
+  const extension = chrome.runtime.getManifest?.().version ?? "?";
+  let server: string | null = null;
+  try {
+    const { serverUrl } = await getSettings();
+    if (serverUrl) {
+      const r = await fetch(`${serverUrl}/api/v1/version`, { cache: "no-store" });
+      if (r.ok) server = ((await r.json()) as { version?: string }).version ?? null;
+    }
+  } catch {
+    server = null;
+  }
+  // Disallineate se cambia la versione principale o intermedia (es. 0.6.x contro 0.7.x).
+  const mm = (v: string) => v.split(".").slice(0, 2).join(".");
+  return { extension, server, mismatch: !!server && mm(server) !== mm(extension) };
+}

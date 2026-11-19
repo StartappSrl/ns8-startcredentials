@@ -11,9 +11,10 @@ import { randomBytes } from "node:crypto";
 import type { FastifyInstance } from "fastify";
 import {
   Api, ApiError, completeRecovery, decryptExport, enableMfa, importAsClients, importBitwarden, importCsv, importInto, importStartCredentials,
-  login, passwordHealth, planClientImport, register, trustDevice, SecurityError, serverStatus, setupMfa, Vault, verifyMfa,
+  decryptSend, login, passwordHealth, passwordPolicy, planClientImport, PolicyError, register, trustDevice, SecurityError, serverStatus, setupMfa, Vault, verifyMfa,
 } from "@startcredentials/client";
 import { Config, createPool, Db, migrate, pruneAudit, totpAt } from "../src/core.js";
+import { purgeExpiredSends } from "../src/routes/sends.js";
 import { APP_ROOT, buildApp } from "../src/server.js";
 
 process.env.NODE_ENV = "test";
@@ -68,7 +69,8 @@ async function signIn(email: string, password: string, userId: string): Promise<
 }
 
 async function rejects(p: Promise<unknown>, code: string) {
-  await assert.rejects(p, (e: unknown) => (e instanceof ApiError && e.code === code) || (e instanceof SecurityError && code === "security"));
+  await assert.rejects(p, (e: unknown) => (e instanceof ApiError && e.code === code) || (e instanceof SecurityError && code === "security")
+    || (e instanceof PolicyError && e.code === code));
 }
 
 const state: Record<string, any> = {};
@@ -743,6 +745,140 @@ describe("StartCredentials end-to-end", () => {
     const mixed = await marco.shareMany([foreign, ids[2]!], { userIds: [paoloId] }, "read");
     assert.equal(mixed.failed.length, 1);
     assert.equal(mixed.done, 1);
+  });
+
+  test("regola della master password: pubblicata dal server, applicata dai client", async () => {
+    const marco: Vault = state.marco;
+    assert.equal((await passwordPolicy(api())).minPasswordLength, 12);
+    cfg.minPasswordLength = 24;
+    try {
+      assert.equal((await passwordPolicy(api())).minPasswordLength, 24);
+      const sara = await signIn("sara@azienda.it", "nuova password di sara", state.saraId);
+      await rejects(sara.changePassword("nuova password di sara", "lunga ma non abbastanza", await mfaCode(state.saraId), FAST), "password_policy");
+      const inv = await marco.invite("breve@azienda.it", "Breve", "user");
+      await rejects(register(api(), { token: inv.inviteToken, password: "solo venti caratteri!", kdf: FAST }), "password_policy");
+      // L'invito non è stato consumato: con una password adeguata la registrazione riesce.
+      const ok = await register(api(), { token: inv.inviteToken, password: "una frase lunga a sufficienza per la regola", kdf: FAST });
+      assert.equal(ok.state, "mfa_setup");
+    } finally {
+      cfg.minPasswordLength = 12;
+    }
+  });
+
+  test("recupero: collegamento inviato fino a due indirizzi, codice mai per email, avvisi sull'indirizzo principale", async () => {
+    const marco: Vault = state.marco;
+    const sara = await signIn("sara@azienda.it", "nuova password di sara", state.saraId);
+    sentMail.length = 0;
+    await rejects(sara.setRecoveryEmail("SARA@azienda.it"), "same_as_primary");
+    await sara.setRecoveryEmail("sara.personale@example.org");
+    assert.equal(sentMail.length, 1);
+    assert.equal(sentMail[0]!.to, "sara@azienda.it");
+    assert.match(sentMail[0]!.text, /sara\.personale@example\.org/);
+    const listed = (await marco.users()).find((u) => u.id === state.saraId)!;
+    assert.equal(listed.recoveryEmail, "sara.personale@example.org");
+
+    // Due indirizzi: principale e di recupero.
+    sentMail.length = 0;
+    const r = await marco.startRecovery(state.saraId, state.shares.slice(0, 2), FAST, { sendTo: ["sara@azienda.it", "sara.personale@example.org"] });
+    assert.deepEqual(r.emailed.sort(), ["sara.personale@example.org", "sara@azienda.it"]);
+    assert.equal(sentMail.length, 2);
+    for (const m of sentMail) {
+      assert.ok(m.text.includes(r.recoveryUrl), "collegamento nell'email");
+      assert.ok(!m.text.includes(r.code) && !m.text.includes(r.code.replace(/-/g, "")), "il codice non va mai per email");
+    }
+    // Solo l'indirizzo di recupero: il principale riceve comunque un avviso.
+    sentMail.length = 0;
+    await marco.startRecovery(state.saraId, state.shares.slice(0, 2), FAST, { sendTo: ["sara.personale@example.org"] });
+    assert.deepEqual(sentMail.map((m) => m.to), ["sara.personale@example.org", "sara@azienda.it"]);
+    assert.match(sentMail[1]!.subject, /Avviato il recupero/);
+    // Più di due indirizzi: rifiutato dal server.
+    await assert.rejects(marco.api.post(`/users/${state.saraId}/recovery`, { blob: { data: "x", kdfParams: {} }, sendTo: ["a@x.it", "b@x.it", "c@x.it"] }));
+    const log = await marco.auditLog({ limit: 20 });
+    assert.ok(log.some((l) => l.action === "user.recovery_started" && JSON.stringify(l.details).includes("sara.personale@example.org")));
+    await sara.setRecoveryEmail(null);
+  });
+
+  test("invio sicuro: email con il solo collegamento, codice mai al server, apertura singola, revoca, scadenza, regole", async () => {
+    const marco: Vault = state.marco;
+    const cid = await marco.createContainer({ name: "Cliente invii" });
+    const OTP = "otpauth://totp/Portale?secret=GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ";
+    await marco.createItem(cid, { type: "login", name: "Portale cliente", username: "admin", password: "Segreta-Davvero-42", urls: ["https://portale.cliente.it"], totpUri: OTP, notes: "nota interna" });
+    const item = (await marco.items(cid))[0]!;
+    const open = async (token: string) => {
+      const r = await fetch(`${base}/api/v1/sends/open`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ token }) });
+      return { status: r.status, body: await r.json() as any };
+    };
+    sentMail.length = 0;
+    const send = await marco.createSecureSend(item, { recipientEmail: "Referente@Cliente.it", expiresInHours: 24, fields: { username: true, password: true, urls: true, otp: true } });
+    assert.match(send.code, /^[A-Z2-9]{4}-[A-Z2-9]{4}-[A-Z2-9]{4}-[A-Z2-9]{4}$/);
+    assert.equal(send.emailed, true);
+    const mail = sentMail.find((m) => m.to === "referente@cliente.it")!;
+    assert.ok(mail.text.includes(send.link), "collegamento nell'email");
+    for (const secret of [send.code, send.code.replace(/-/g, ""), "Segreta-Davvero-42", "GEZDGNBV"]) assert.ok(!mail.text.includes(secret), "nessun segreto nell'email");
+    const token = send.link.split("#")[1]!;
+    // Nel database solo il pacchetto cifrato.
+    const row = (await db.query("SELECT envelope FROM secure_sends WHERE id = $1", [send.id])).rows[0];
+    assert.ok(!row.envelope.includes("Segreta-Davvero-42"));
+
+    const first = await open(token);
+    assert.equal(first.status, 200);
+    assert.equal(first.body.sender, "Marco Ferri");
+    assert.equal(first.body.viewsLeft, 0);
+    await assert.rejects(decryptSend(first.body.envelope, "AAAA-AAAA-AAAA-AAAA"));
+    const data = await decryptSend(first.body.envelope, send.code.toLowerCase());
+    assert.equal(data.password, "Segreta-Davvero-42");
+    assert.equal(data.username, "admin");
+    assert.equal(data.totpUri, OTP);
+    assert.equal(data.notes, undefined, "solo i campi scelti");
+    // Apertura singola: poi il pacchetto non esiste più, e il mittente viene avvisato.
+    assert.equal((await open(token)).status, 404);
+    assert.equal((await db.query("SELECT envelope FROM secure_sends WHERE id = $1", [send.id])).rows[0].envelope, null);
+    assert.ok(sentMail.some((m) => m.to === "marco@azienda.it" && /aperto/.test(m.subject)));
+
+    // Due aperture, poi revoca.
+    const s2 = await marco.createSecureSend(item, { recipientEmail: "a@cliente.it", expiresInHours: 2, maxViews: 2, fields: { password: true } });
+    const t2 = s2.link.split("#")[1]!;
+    assert.equal((await open(t2)).body.viewsLeft, 1);
+    await marco.revokeSecureSend(s2.id);
+    assert.equal((await open(t2)).status, 404);
+    // Scadenza e pulizia.
+    const s3 = await marco.createSecureSend(item, { recipientEmail: "b@cliente.it", expiresInHours: 1, fields: { password: true } });
+    await db.query("UPDATE secure_sends SET expires_at = now() - interval '1 minute' WHERE id = $1", [s3.id]);
+    assert.equal((await open(s3.link.split("#")[1]!)).status, 404);
+    assert.ok(await purgeExpiredSends(db) >= 1);
+    const list = await marco.secureSends();
+    assert.deepEqual([send.id, s2.id, s3.id].map((id) => list.find((x) => x.id === id)!.status), ["consumed", "revoked", "expired"]);
+    await rejects(marco.revokeSecureSend(s2.id), "not_found");
+
+    // Regole dell'amministratore: domini ammessi, durata massima, funzione disattivata.
+    cfg.secureSend = { enabled: true, maxHours: 48, domains: ["cliente.it"] };
+    try {
+      await rejects(marco.createSecureSend(item, { recipientEmail: "x@altro.com", expiresInHours: 1, fields: { password: true } }), "recipient_domain_not_allowed");
+      await marco.createSecureSend(item, { recipientEmail: "x@uff.cliente.it", expiresInHours: 1, fields: { password: true } });
+      await rejects(marco.createSecureSend(item, { recipientEmail: "x@cliente.it", expiresInHours: 72, fields: { password: true } }), "expiry_too_long");
+      cfg.secureSend = { enabled: false, maxHours: 48, domains: [] };
+      await rejects(marco.createSecureSend(item, { recipientEmail: "x@cliente.it", expiresInHours: 1, fields: { password: true } }), "secure_send_disabled");
+    } finally {
+      cfg.secureSend = { enabled: true, maxHours: 168, domains: [] };
+    }
+    // Chi ha solo la lettura non invia all'esterno.
+    await marco.share(cid, state.saraId, "read");
+    const sara = await signIn("sara@azienda.it", "nuova password di sara", state.saraId);
+    await rejects(sara.createSecureSend((await sara.items(cid))[0]!, { recipientEmail: "x@cliente.it", expiresInHours: 1, fields: { password: true } }), "write_required");
+    // Token falsi: nessuna informazione.
+    assert.equal((await open("token-inventato-0123456789")).status, 404);
+    const log = await marco.auditLog({ limit: 60 });
+    for (const a of ["send.created", "send.opened", "send.revoked"]) assert.ok(log.some((l) => l.action === a), `manca ${a}`);
+
+    // Pagina pubblica: script solo dallo stesso server, niente in linea.
+    const page = await fetch(`${base}/s`);
+    const csp = page.headers.get("content-security-policy") ?? "";
+    assert.match(csp, /script-src 'self'/);
+    assert.ok(!csp.includes("unsafe"));
+    assert.equal(page.headers.get("referrer-policy"), "no-referrer");
+    const html = await page.text();
+    assert.ok(!/<script>|style=|<style/i.test(html), "nessuno script o stile in linea");
+    assert.equal((await fetch(`${base}/send.js?v=x`)).status, 200);
   });
 
   test("intestazioni di sicurezza: CSP senza eccezioni e cache corretta (rilievi del vulnerability assessment)", async () => {

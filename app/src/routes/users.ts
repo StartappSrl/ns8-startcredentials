@@ -22,6 +22,7 @@ export async function userRoutes(app: FastifyInstance, ctx: Ctx) {
          FROM users u JOIN user_keys k ON k.user_id = u.id AND k.version = u.key_version
         WHERE u.id = $1`, [a.id]);
     const u = r.rows[0];
+    const recEmail = (await db.query("SELECT recovery_email FROM users WHERE id = $1", [a.id])).rows[0]?.recovery_email ?? null;
     const org = await db.query("SELECT sign_public, recovery_public, container_id, key_version FROM org WHERE id = 1");
     const rotations = await db.query("SELECT version, old_sign_public, new_sign_public, new_recovery_public, signature FROM org_rotations ORDER BY version");
     return {
@@ -29,7 +30,7 @@ export async function userRoutes(app: FastifyInstance, ctx: Ctx) {
       keyVersion: u.key_version,
       publicKeys: { box: u.box_public, sign: u.sign_public },
       privateEnc: u.private_enc, kdfParams: u.kdf_params,
-      certification: u.certification, hasRecovery: u.has_recovery,
+      certification: u.certification, hasRecovery: u.has_recovery, recoveryEmail: recEmail,
       org: org.rows[0] ? {
         signPublic: org.rows[0].sign_public, recoveryPublic: org.rows[0].recovery_public, keyVersion: org.rows[0].key_version,
         containerId: u.role === "admin" ? org.rows[0].container_id : undefined,
@@ -38,6 +39,26 @@ export async function userRoutes(app: FastifyInstance, ctx: Ctx) {
         })),
       } : null,
     };
+  });
+
+  /** Indirizzo secondario a cui inviare, se serve, il collegamento di recupero. */
+  app.put("/api/v1/me/recovery-email", async (req) => {
+    const a = requireAuth(req);
+    const { email } = z.object({ email: z.string().trim().toLowerCase().email().max(200).nullable() }).parse(req.body);
+    const u = (await db.query("SELECT email, display_name, recovery_email FROM users WHERE id = $1", [a.id])).rows[0];
+    if (email && email === u.email.toLowerCase()) throw badRequest("same_as_primary", "L'indirizzo di recupero deve essere diverso da quello dell'account");
+    await tx(db, async (c) => {
+      await c.query("UPDATE users SET recovery_email = $2 WHERE id = $1", [a.id, email]);
+      await audit(c, { actorId: a.id, action: "user.recovery_email_set", targetType: "user", targetId: a.id, ip: req.ip, details: { email } });
+    });
+    // Avviso sull'indirizzo principale: un cambio non richiesto si nota subito.
+    if (email !== u.recovery_email) {
+      await ctx.mailer.send(u.email, "Indirizzo di recupero di StartCredentials modificato",
+        email
+          ? `L'indirizzo per il recupero del tuo account StartCredentials è ora ${email}.\n\nSe non sei stato tu, avvisa subito un amministratore.\n`
+          : `L'indirizzo per il recupero del tuo account StartCredentials è stato rimosso.\n\nSe non sei stato tu, avvisa subito un amministratore.\n`);
+    }
+    return { recoveryEmail: email };
   });
 
   app.put("/api/v1/me/recovery", async (req) => {
@@ -115,13 +136,13 @@ export async function userRoutes(app: FastifyInstance, ctx: Ctx) {
   app.get("/api/v1/users", async (req) => {
     requireAdmin(req);
     const r = await db.query(
-      `SELECT u.id, u.email, u.display_name, u.role, u.status, u.mfa_enabled, u.created_at, u.key_version,
+      `SELECT u.id, u.email, u.recovery_email, u.display_name, u.role, u.status, u.mfa_enabled, u.created_at, u.key_version,
               k.box_public, k.sign_public, k.certification, (k.recovery_enc IS NOT NULL) AS has_recovery,
               (u.recovery_token_hash IS NOT NULL AND u.recovery_expires_at > now()) AS recovery_pending
          FROM users u LEFT JOIN user_keys k ON k.user_id = u.id AND k.version = u.key_version
         ORDER BY u.display_name`);
     return r.rows.map((u) => ({
-      id: u.id, email: u.email, displayName: u.display_name, role: u.role, status: u.status,
+      id: u.id, email: u.email, recoveryEmail: u.recovery_email, displayName: u.display_name, role: u.role, status: u.status,
       mfaEnabled: u.mfa_enabled, createdAt: u.created_at, keyVersion: u.key_version,
       publicKeys: u.box_public ? { box: u.box_public, sign: u.sign_public } : null,
       certified: !!u.certification, hasRecovery: u.has_recovery, recoveryPending: u.recovery_pending,
@@ -277,17 +298,41 @@ export async function userRoutes(app: FastifyInstance, ctx: Ctx) {
   app.post("/api/v1/users/:id/recovery", async (req) => {
     const a = requireAdmin(req);
     const { id } = z.object({ id: z.string().uuid() }).parse(req.params);
-    const body = z.object({ blob: z.object({ data: envelope, kdfParams }) }).parse(req.body);
+    const body = z.object({
+      blob: z.object({ data: envelope, kdfParams }),
+      // Fino a due indirizzi a cui inviare il collegamento (il codice si comunica a voce).
+      sendTo: z.array(z.string().trim().toLowerCase().email().max(200)).max(2).default([]),
+    }).parse(req.body);
     if (id === a.id) throw forbidden("cannot_recover_self");
+    const sendTo = [...new Set(body.sendTo)];
     const token = newToken();
-    await tx(db, async (c) => {
+    const target = await tx(db, async (c) => {
       const u = await c.query(
-        "UPDATE users SET recovery_token_hash = $2, recovery_blob = $3, recovery_expires_at = now() + interval '24 hours' WHERE id = $1 AND status = 'active' RETURNING id",
+        "UPDATE users SET recovery_token_hash = $2, recovery_blob = $3, recovery_expires_at = now() + interval '24 hours' WHERE id = $1 AND status = 'active' RETURNING email, display_name",
         [id, tokenHash(cfg, token), body.blob]);
       if (!u.rows[0]) throw notFound();
-      await audit(c, { actorId: a.id, action: "user.recovery_started", targetType: "user", targetId: id, ip: req.ip });
+      await audit(c, { actorId: a.id, action: "user.recovery_started", targetType: "user", targetId: id, ip: req.ip, details: { sentTo: sendTo } });
+      return u.rows[0] as { email: string; display_name: string };
     });
-    return { recoveryToken: token, recoveryUrl: `${cfg.publicUrl}/#recover=${token}` };
+    const recoveryUrl = `${cfg.publicUrl}/#recover=${token}`;
+    const admin = (await db.query("SELECT display_name FROM users WHERE id = $1", [a.id])).rows[0]?.display_name ?? "Un amministratore";
+    const sent: string[] = [];
+    const failed: string[] = [];
+    for (const to of sendTo) {
+      const ok = await ctx.mailer.send(to, "Recupero del tuo account StartCredentials",
+        `Ciao ${target.display_name},\n\n${admin} ha avviato il recupero del tuo account StartCredentials.\n\n` +
+        `1. Apri questo collegamento (valido 24 ore):\n${recoveryUrl}\n\n` +
+        `2. Inserisci il codice di recupero che ti comunicherà l'amministratore a voce: non viene mai inviato per email.\n\n` +
+        `3. Scegli una nuova master password.\n\nSe non hai chiesto tu il recupero, avvisa subito un amministratore e non usare il collegamento.\n`);
+      (ok ? sent : failed).push(to);
+    }
+    // Collegamento inviato solo ad altri indirizzi: l'indirizzo principale riceve comunque un avviso.
+    if (sent.length && !sent.includes(target.email.toLowerCase())) {
+      await ctx.mailer.send(target.email, "Avviato il recupero del tuo account StartCredentials",
+        `${admin} ha avviato il recupero del tuo account StartCredentials; il collegamento è stato inviato a ${sent.join(" e ")}.\n\n` +
+        `Se non l'hai chiesto tu, avvisa subito un amministratore.\n`);
+    }
+    return { recoveryToken: token, recoveryUrl, emailed: sent, emailFailed: failed };
   });
 
   // ------------------------------------------------------------ organizzazione

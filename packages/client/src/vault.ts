@@ -17,6 +17,8 @@ import {
   OrgRotation, orgRotationMessage, sign, verifyOrgChain,
   ItemShare, shareItemKey, openItemShare, ikContext, dataContext,
 } from "@startcredentials/crypto";
+import { encryptSend, newAccessCode, SendPayload } from "./send.js";
+import { effectiveTotpUri } from "./totp-fields.js";
 import { Api, ApiError } from "./api.js";
 
 const enc = new TextEncoder();
@@ -78,6 +80,7 @@ export interface DirectoryUser {
 export interface Me {
   id: string; email: string; displayName: string; role: "admin" | "user"; keyVersion: number;
   publicKeys: PublicKeys; privateEnc: string; kdfParams: KdfParams; certification: string | null; hasRecovery: boolean;
+  recoveryEmail?: string | null;
   org: { signPublic: string; recoveryPublic: string; containerId?: string; keyVersion?: number; rotations?: OrgRotation[] } | null;
 }
 export type SessionState = "mfa_setup" | "mfa_pending" | "active";
@@ -150,6 +153,7 @@ export interface RegisterParams {
 
 /** Registrazione da invito (o bootstrap del primo amministratore). Restituisce una sessione in stato mfa_setup. */
 export async function register(api: Api, p: RegisterParams): Promise<{ token: string; state: SessionState; userId: string }> {
+  await assertPasswordPolicy(api, p.password);
   await ready();
   const { clientRegistrationState, registrationRequest } = opaque.client.startRegistration({ password: p.password });
   const start = await api.post<{ registrationResponse: string; userId: string; org: { signPublic: string; recoveryPublic: string } | null }>(
@@ -226,13 +230,42 @@ export async function logout(api: Api): Promise<void> {
 }
 
 /** Il primo amministratore usa il token di bootstrap del modulo NethServer. */
-export async function serverStatus(api: Api): Promise<{ bootstrapped: boolean; org: { signPublic: string; recoveryPublic: string } | null }> {
+export async function serverStatus(api: Api): Promise<{
+  bootstrapped: boolean; org: { signPublic: string; recoveryPublic: string } | null;
+  policy?: { minPasswordLength: number; secureSend?: { enabled: boolean; maxHours: number; domains: string[] } };
+}> {
   return api.get("/auth/status");
+}
+
+/** Lunghezza minima della master password decisa dall'azienda (predefinita 12). */
+export async function passwordPolicy(api: Api): Promise<{ minPasswordLength: number }> {
+  const s = await serverStatus(api);
+  return { minPasswordLength: Math.max(12, s.policy?.minPasswordLength ?? 12) };
+}
+
+export class PolicyError extends Error {
+  code = "password_policy";
+  constructor(message: string) {
+    super(message);
+    this.name = "PolicyError";
+  }
+}
+
+/**
+ * Applica la regola sulla master password. Il server non la può verificare
+ * (con OPAQUE non la riceve mai): lo fanno i client, prima di ogni operazione.
+ */
+export async function assertPasswordPolicy(api: Api, password: string): Promise<void> {
+  const { minPasswordLength } = await passwordPolicy(api);
+  if ([...password].length < minPasswordLength) {
+    throw new PolicyError(`La master password deve avere almeno ${minPasswordLength} caratteri: meglio una frase di più parole.`);
+  }
 }
 
 /** Completa un recupero account avviato da due amministratori. */
 export async function completeRecovery(api: Api, p: { token: string; code: string; newPassword: string; kdf?: RegisterParams["kdf"] }): Promise<void> {
   await ready();
+  await assertPasswordPolicy(api, p.newPassword);
   const { clientRegistrationState, registrationRequest } = opaque.client.startRegistration({ password: p.newPassword });
   const start = await api.post<{ registrationResponse: string; userId: string; blob: { data: string; kdfParams: KdfParams } }>(
     "/auth/recover/start", { token: p.token, registrationRequest });
@@ -866,6 +899,7 @@ export class Vault {
    * anche il codice MFA. Le altre sessioni vengono chiuse.
    */
   async changePassword(currentPassword: string, newPassword: string, mfaCode: string, kdf?: RegisterParams["kdf"]): Promise<void> {
+    await assertPasswordPolicy(this.api, newPassword);
     const me = await this.refreshMe();
     const oldMk = deriveMasterKey(currentPassword, me.kdfParams);
     try {
@@ -898,6 +932,13 @@ export class Vault {
 
   async revokeDevice(id: string): Promise<void> {
     await this.api.del(`/me/devices/${id}`);
+  }
+
+  /** Indirizzo secondario per ricevere il collegamento di recupero (null per toglierlo). */
+  async setRecoveryEmail(email: string | null): Promise<string | null> {
+    const r = await this.api.put<{ recoveryEmail: string | null }>("/me/recovery-email", { email: email?.trim() || null });
+    this.me.recoveryEmail = r.recoveryEmail;
+    return r.recoveryEmail;
   }
 
   async mfaStatus(): Promise<{ backupCodesRemaining: number }> {
@@ -1096,6 +1137,47 @@ export class Vault {
   async unshareGroup(containerId: string, groupId: string): Promise<void> {
     await this.api.del(`/containers/${containerId}/groups/${groupId}`);
     await this.rotate(containerId);
+  }
+
+  // ---------------------------------------------------------------- invii sicuri
+
+  /**
+   * Invia una credenziale a un destinatario (anche esterno): i campi scelti
+   * vengono cifrati qui con un codice di accesso casuale. Il server conserva
+   * solo il pacchetto cifrato e manda per email il collegamento; il codice
+   * resta al mittente, che lo comunica per un altro canale.
+   */
+  async createSecureSend(item: Item, opts: {
+    recipientEmail: string; expiresInHours: number; maxViews?: number;
+    fields: { username?: boolean; password?: boolean; urls?: boolean; notes?: boolean; otp?: boolean };
+  }): Promise<{ id: string; code: string; link: string; emailed: boolean }> {
+    const d = item.data;
+    const payload: SendPayload = { v: 1, name: d.name };
+    if (opts.fields.username && d.username) payload.username = d.username;
+    if (opts.fields.password && d.password) payload.password = d.password;
+    if (opts.fields.urls && d.urls?.length) payload.urls = d.urls;
+    if (opts.fields.notes && d.notes) payload.notes = d.notes;
+    const totp = opts.fields.otp ? effectiveTotpUri(d) : undefined;
+    if (totp) payload.totpUri = totp;
+    if (Object.keys(payload).length <= 2) throw new SecurityError("Scegli almeno un campo da inviare");
+    const code = newAccessCode();
+    const envelope = await encryptSend(payload, code);
+    const r = await this.api.post<{ id: string; link: string; emailed: boolean }>("/sends", {
+      containerId: item.containerId, itemId: item.id, recipientEmail: opts.recipientEmail.trim(),
+      envelope, expiresInHours: opts.expiresInHours, maxViews: opts.maxViews ?? 1,
+    });
+    return { ...r, code };
+  }
+
+  async secureSends(): Promise<{
+    id: string; containerId: string | null; itemId: string | null; recipientEmail: string; createdAt: string; expiresAt: string;
+    maxViews: number; views: number; lastOpenedAt: string | null; status: "active" | "consumed" | "expired" | "revoked";
+  }[]> {
+    return this.api.get("/sends");
+  }
+
+  async revokeSecureSend(id: string): Promise<void> {
+    await this.api.del(`/sends/${id}`);
   }
 
   // ---------------------------------------------------------------- condivisione di più clienti
@@ -1329,6 +1411,7 @@ export class Vault {
     return this.api.get<{
       id: string; email: string; displayName: string; role: "admin" | "user"; status: string; mfaEnabled: boolean;
       createdAt: string; keyVersion: number; publicKeys: PublicKeys | null; certified: boolean; hasRecovery: boolean; recoveryPending: boolean;
+  recoveryEmail?: string | null;
     }[]>("/users");
   }
 
@@ -1495,7 +1578,14 @@ export class Vault {
    * quote Shamir. Restituisce il codice da comunicare all'utente per un canale
    * diverso dal collegamento.
    */
-  async startRecovery(userId: string, shares: string[], kdf?: RegisterParams["kdf"]): Promise<{ recoveryUrl: string; recoveryToken: string; code: string }> {
+  /**
+   * Avvia il recupero di un collega (servono le quote dei custodi). Il collegamento
+   * può essere inviato per email fino a due indirizzi; il codice resta da
+   * comunicare a voce e non viene mai inviato.
+   */
+  async startRecovery(userId: string, shares: string[], kdf?: RegisterParams["kdf"], opts: { sendTo?: string[] } = {}): Promise<{
+    recoveryUrl: string; recoveryToken: string; code: string; emailed: string[]; emailFailed: string[];
+  }> {
     if (!this.me.org) throw new SecurityError("Organizzazione non inizializzata");
     const recoveryPrivate = await combine(shares.map((s) => fromB64(s.trim().replace(/^SCR1-/, ""))));
     try {
@@ -1510,8 +1600,10 @@ export class Vault {
       const codeKey = deriveMasterKey(code, kdfParams);
       const data = seal(codeKey, json({ keyVersion: m.keyVersion, keys: toB64(payload) }), ctxs.recovery(userId), `recovery:${userId}`);
       wipe(codeKey); wipe(payload); wipe(keys.boxPrivate); wipe(keys.signPrivate);
-      const r = await this.api.post<{ recoveryUrl: string; recoveryToken: string }>(`/users/${userId}/recovery`, { blob: { data, kdfParams } });
-      return { ...r, code: code.match(/.{4}/g)!.join("-") };
+      const sendTo = (opts.sendTo ?? []).map((x) => x.trim()).filter(Boolean).slice(0, 2);
+      const r = await this.api.post<{ recoveryUrl: string; recoveryToken: string; emailed?: string[]; emailFailed?: string[] }>(
+        `/users/${userId}/recovery`, { blob: { data, kdfParams }, sendTo });
+      return { ...r, emailed: r.emailed ?? [], emailFailed: r.emailFailed ?? [], code: code.match(/.{4}/g)!.join("-") };
     } finally {
       wipe(recoveryPrivate);
     }

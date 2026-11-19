@@ -50,7 +50,7 @@ buildah config --entrypoint=/ \
     --label="org.nethserver.authorizations=traefik@node:routeadm" \
     --label="org.nethserver.tcp-ports-demand=1" \
     --label="org.nethserver.rootfull=0" \
-    --label="org.nethserver.images=${repobase}/${reponame}-app:${IMAGETAG:-latest} docker.io/library/postgres:16.6-alpine" \
+    --label="org.nethserver.images=${repobase}/${reponame}-app:${IMAGETAG:-latest} docker.io/library/postgres:16.15-alpine" \
     "${container}"
 # Commit the image
 buildah commit "${container}" "${repobase}/${reponame}"

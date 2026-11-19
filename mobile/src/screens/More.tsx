@@ -236,9 +236,18 @@ export function HealthScreen() {
 
 // ------------------------------------------------------------------ account
 
+/** Lunghezza minima letta dal server (il motore la applica comunque). */
+function useMinLength(): number {
+  const engine = useEngine();
+  const [n, setN] = useState(12);
+  useEffect(() => { engine.call<{ minPasswordLength: number }>("passwordPolicy").then((p) => setN(p.minPasswordLength)).catch(() => undefined); }, []);
+  return n;
+}
+
 export function ChangePasswordScreen() {
   const engine = useEngine();
   const app = useApp();
+  const minLen = useMinLength();
   const [cur, setCur] = useState("");
   const [pw, setPw] = useState("");
   const [pw2, setPw2] = useState("");
@@ -246,7 +255,7 @@ export function ChangePasswordScreen() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const submit = async () => {
-    if ([...pw].length < 12) return setError("La nuova master password deve avere almeno 12 caratteri.");
+    if ([...pw].length < minLen) return setError(`La nuova master password deve avere almeno ${minLen} caratteri.`);
     if (pw !== pw2) return setError("Le due password non coincidono.");
     setBusy(true);
     setError(null);
@@ -265,7 +274,7 @@ export function ChangePasswordScreen() {
       <Header title="Cambia la master password" back />
       <ScrollView contentContainerStyle={{ padding: 16, gap: 12 }} keyboardShouldPersistTaps="handled">
         <Field label="Master password attuale" value={cur} onChangeText={setCur} secureTextEntry />
-        <Field label="Nuova master password" value={pw} onChangeText={setPw} secureTextEntry />
+        <Field label={`Nuova master password (almeno ${minLen} caratteri)`} value={pw} onChangeText={setPw} secureTextEntry />
         <Field label="Ripeti la nuova master password" value={pw2} onChangeText={setPw2} secureTextEntry />
         <Field label="Codice MFA o di riserva" value={code} onChangeText={setCode} autoComplete="one-time-code" />
         {error && <Notice kind="error">{error}</Notice>}
@@ -316,12 +325,13 @@ export function BackupCodesScreen() {
 export function RegisterScreen() {
   const engine = useEngine();
   const app = useApp();
+  const minLen = useMinLength();
   const [pw, setPw] = useState("");
   const [pw2, setPw2] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const submit = async () => {
-    if ([...pw].length < 12) return setError("La master password deve avere almeno 12 caratteri: meglio una frase lunga.");
+    if ([...pw].length < minLen) return setError(`La master password deve avere almeno ${minLen} caratteri: meglio una frase lunga.`);
     if (pw !== pw2) return setError("Le due password non coincidono.");
     setBusy(true);
     setError(null);
@@ -343,7 +353,7 @@ export function RegisterScreen() {
       <Card>
         <Text style={{ fontSize: 22, fontWeight: "700", color: color.ink }}>Attiva il tuo account</Text>
         <Text style={{ color: color.muted }}>Scegli la master password: la conosci solo tu, nessuno può recuperarla al posto tuo senza la procedura con gli amministratori.</Text>
-        <Field label="Master password" value={pw} onChangeText={setPw} secureTextEntry />
+        <Field label={`Master password (almeno ${minLen} caratteri)`} value={pw} onChangeText={setPw} secureTextEntry />
         <Field label="Ripeti la master password" value={pw2} onChangeText={setPw2} secureTextEntry />
         {error && <Notice kind="error">{error}</Notice>}
         <Button title={busy ? "Creazione delle chiavi…" : "Crea l'account"} onPress={submit} busy={busy} disabled={!pw || !pw2} />

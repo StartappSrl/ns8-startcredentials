@@ -3,7 +3,7 @@ import { Alert, ScrollView, Switch, Text, View } from "react-native";
 import { useEngine } from "../engine/Engine";
 import { errorText, useApp } from "../state/App";
 import { biometricAvailable, clearBiometricSession, clearDeviceTrust, saveBiometricSession } from "../state/storage";
-import { Button, Card, Notice } from "../ui/kit";
+import { Button, Card, Field, Notice } from "../ui/kit";
 import { Header } from "./Vault";
 import { AppState } from "react-native";
 import { Autofill } from "../../modules/sc-autofill";
@@ -17,6 +17,7 @@ export function SettingsScreen() {
   const [devices, setDevices] = useState<{ id: string; name: string; expiresAt: string }[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [syncing, setSyncing] = useState(false);
+  const [recEmail, setRecEmail] = useState(app.me?.recoveryEmail ?? "");
   const [autofillOn, setAutofillOn] = useState(Autofill.isEnabled());
   // Al ritorno dalle impostazioni di Android si aggiorna lo stato.
   useEffect(() => {
@@ -112,6 +113,18 @@ export function SettingsScreen() {
           <Button title="Salute delle password" kind="secondary" onPress={() => app.push({ name: "health" })} />
           <Button title="Cambia la master password" kind="secondary" disabled={engine.offline} onPress={() => app.push({ name: "changePassword" })} />
           <Button title="Codici di riserva MFA" kind="secondary" disabled={engine.offline} onPress={() => app.push({ name: "backupCodes" })} />
+          <Text style={{ color: color.muted }}>Email di recupero: se dimentichi la master password, il collegamento di recupero può arrivare anche qui. Il codice ti viene comunicato a voce.</Text>
+          <Field label="Email di recupero" value={recEmail} onChangeText={setRecEmail} keyboardType="email-address" placeholder="nome@esempio.it" />
+          <Button title="Salva l'email di recupero" kind="secondary" disabled={engine.offline || recEmail.trim() === (app.me?.recoveryEmail ?? "")} onPress={async () => {
+            try {
+              const r = await engine.call<string | null>("setRecoveryEmail", recEmail.trim() || null);
+              if (app.me) app.me.recoveryEmail = r;
+              setRecEmail(r ?? "");
+              app.toast(r ? "Email di recupero salvata" : "Email di recupero rimossa");
+            } catch (e) {
+              setError(errorText(e));
+            }
+          }} />
         </Card>
         {error && <Notice kind="error">{error}</Notice>}
         <Button title="Blocca ora" kind="secondary" onPress={() => void app.lock()} />

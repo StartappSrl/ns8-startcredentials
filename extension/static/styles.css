@@ -210,3 +210,7 @@ body.inline-menu { background: var(--surface); width: 100%; min-height: 0; }
 .client.picked { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent-line); }
 .client:disabled { opacity: .55; cursor: not-allowed; }
 .bulk-bar.card { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; padding: 10px 14px; background: var(--accent-soft); border-color: var(--accent-line); }
+
+/* versioni in fondo alla barra laterale */
+.version-line { display: flex; flex-wrap: wrap; gap: 4px 10px; padding: 8px 10px 0; font-size: 11.5px; color: var(--muted); }
+.version-warn { color: var(--danger); font-weight: 600; }

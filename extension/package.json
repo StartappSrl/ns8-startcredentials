@@ -1,6 +1,6 @@
 {
   "name": "@startcredentials/extension",
-  "version": "0.7.0",
+  "version": "0.7.6",
   "private": true,
   "license": "GPL-3.0-or-later",
   "type": "module",
@@ -11,19 +11,20 @@
     "test:import": "node test/import-browser.mjs",
     "test:inline": "node test/inline.mjs",
     "test:popup": "node test/popup-smoke.mjs",
-    "test:site": "node test/site.mjs"
+    "test:site": "node test/site.mjs",
+    "test:send": "node test/send-page.mjs"
   },
   "dependencies": {
     "@fontsource/jetbrains-mono": "5.1.1",
     "@fontsource/plus-jakarta-sans": "5.1.1",
-    "@startcredentials/client": "0.7.0",
+    "@startcredentials/client": "0.7.6",
     "preact": "10.25.4",
     "qrcode-generator": "1.4.4"
   },
   "devDependencies": {
     "@types/chrome": "0.0.287",
-    "esbuild": "0.24.2",
-    "fflate": "0.8.2",
+    "esbuild": "0.28.2",
+    "fflate": "0.8.3",
     "jsdom": "^25.0.1",
     "typescript": "5.7.2"
   }

@@ -19,6 +19,16 @@
         />
       </cv-column>
     </cv-row>
+    <cv-row v-if="app_version">
+      <cv-column>
+        <cv-tile light>
+          <span class="app-version"
+            >{{ $t("settings.app_version") }}:
+            <strong>{{ app_version }}</strong></span
+          >
+        </cv-tile>
+      </cv-column>
+    </cv-row>
     <cv-row v-if="bootstrap_token && configuredHost">
       <cv-column>
         <NsInlineNotification
@@ -56,6 +66,48 @@
               :invalid-message="error.mail_from"
               ref="mail_from"
             ></cv-text-input>
+            <cv-number-input
+              :label="$t('settings.min_password_length')"
+              v-model.number="min_password_length"
+              :min="12"
+              :max="64"
+              :helper-text="$t('settings.min_password_length_helper')"
+              :disabled="loading.getConfiguration || loading.configureModule"
+              :invalid-message="error.min_password_length"
+            ></cv-number-input>
+            <NsToggle
+              value="secureSend"
+              :label="$t('settings.secure_send')"
+              v-model="secure_send_enabled"
+              :disabled="loading.getConfiguration || loading.configureModule"
+              class="mg-bottom"
+            >
+              <template slot="tooltip">{{
+                $t("settings.secure_send_helper")
+              }}</template>
+              <template slot="text-left">{{
+                $t("settings.disabled")
+              }}</template>
+              <template slot="text-right">{{
+                $t("settings.enabled")
+              }}</template>
+            </NsToggle>
+            <template v-if="secure_send_enabled">
+              <cv-number-input
+                :label="$t('settings.secure_send_max_days')"
+                v-model.number="secure_send_max_days"
+                :min="1"
+                :max="30"
+                :disabled="loading.getConfiguration || loading.configureModule"
+              ></cv-number-input>
+              <cv-text-input
+                :label="$t('settings.secure_send_domains')"
+                v-model.trim="secure_send_domains"
+                :helper-text="$t('settings.secure_send_domains_helper')"
+                placeholder="cliente1.it, cliente2.com"
+                :disabled="loading.getConfiguration || loading.configureModule"
+              ></cv-text-input>
+            </template>
             <NsToggle
               value="letsEncrypt"
               :label="$t('settings.lets_encrypt')"
@@ -127,7 +179,12 @@ export default {
       configuredHost: "",
       lets_encrypt: true,
       mail_from: "",
+      min_password_length: 12,
+      secure_send_enabled: true,
+      secure_send_max_days: 7,
+      secure_send_domains: "",
       bootstrap_token: "",
+      app_version: "",
       loading: {
         getConfiguration: false,
         configureModule: false,
@@ -210,7 +267,12 @@ export default {
       this.configuredHost = config.host;
       this.lets_encrypt = config.host ? config.lets_encrypt : true;
       this.bootstrap_token = config.bootstrap_token || "";
+      this.app_version = config.app_version || "";
       this.mail_from = config.mail_from || "";
+      this.min_password_length = config.min_password_length || 12;
+      this.secure_send_enabled = config.secure_send_enabled !== false;
+      this.secure_send_max_days = config.secure_send_max_days || 7;
+      this.secure_send_domains = config.secure_send_domains || "";
       this.focusElement("host");
     },
     validateConfigureModule() {
@@ -277,6 +339,10 @@ export default {
             host: this.host,
             lets_encrypt: this.lets_encrypt,
             mail_from: this.mail_from,
+            min_password_length: Number(this.min_password_length) || 12,
+            secure_send_enabled: this.secure_send_enabled,
+            secure_send_max_days: Number(this.secure_send_max_days) || 7,
+            secure_send_domains: this.secure_send_domains,
           },
           extra: {
             title: this.$t("settings.configure_instance", {

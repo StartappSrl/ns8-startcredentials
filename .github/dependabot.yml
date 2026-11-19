@@ -1,0 +1,47 @@
+# Aggiornamenti automatici delle dipendenze: GitHub apre richieste di modifica
+# settimanali e segnala subito le librerie con vulnerabilità note.
+# Ogni richiesta fa partire i test (workflow "test-app"): unire solo se verdi.
+version: 2
+updates:
+  # Server, SDK, core crittografico ed estensione (workspace npm)
+  - package-ecosystem: npm
+    directory: "/"
+    schedule: { interval: weekly, day: monday }
+    open-pull-requests-limit: 5
+    groups:
+      minori:
+        update-types: [minor, patch]
+
+  # Pannello NethServer
+  - package-ecosystem: npm
+    directory: "/ui"
+    schedule: { interval: monthly }
+    open-pull-requests-limit: 3
+    groups:
+      minori:
+        update-types: [minor, patch]
+
+  # App Android: Expo e React Native si aggiornano insieme con "npx expo install"
+  - package-ecosystem: npm
+    directory: "/mobile"
+    schedule: { interval: weekly, day: monday }
+    open-pull-requests-limit: 5
+    ignore:
+      - dependency-name: "expo"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "expo-*"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "react-native"
+        update-types: ["version-update:semver-major", "version-update:semver-minor"]
+      - dependency-name: "react-native-*"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "react"
+        update-types: ["version-update:semver-major", "version-update:semver-minor"]
+    groups:
+      minori:
+        update-types: [minor, patch]
+
+  # Azioni usate nei workflow
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule: { interval: monthly }

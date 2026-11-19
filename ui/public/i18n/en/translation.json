@@ -34,7 +34,15 @@
     "instance_url": "Open StartCredentials",
     "mail_from": "Sender address",
     "mail_from_helper": "Address used for invitations. Leave empty to use the smarthost account: many providers reject other senders.",
-    "format": "Invalid format"
+    "format": "Invalid format",
+    "app_version": "Application version",
+    "min_password_length": "Minimum master password length",
+    "min_password_length_helper": "12 to 64 characters. Enforced by the extension and the app on registration, change and recovery: the server never sees the password.",
+    "secure_send": "Secure credential sending",
+    "secure_send_helper": "Allows sending a credential to an external recipient: link by email, access code shared separately, content encrypted and destroyed after opening.",
+    "secure_send_max_days": "Maximum lifetime of a send (days)",
+    "secure_send_domains": "Allowed recipient domains",
+    "secure_send_domains_helper": "Comma separated. Empty: any domain. Subdomains are allowed too."
   },
   "about": {
     "title": "About"

@@ -11,6 +11,7 @@ import { userRoutes } from "./routes/users.js";
 import { containerRoutes } from "./routes/containers.js";
 import { itemRoutes } from "./routes/items.js";
 import { groupRoutes } from "./routes/groups.js";
+import { sendRoutes } from "./routes/sends.js";
 import { createMailer, Mailer } from "./mail.js";
 
 export interface AuthUser {
@@ -126,6 +127,7 @@ export async function buildApp(cfg: Config, db: Db, opts: { mailer?: Mailer } = 
   await containerRoutes(app, ctx);
   await itemRoutes(app, ctx);
   await groupRoutes(app, ctx);
+  await sendRoutes(app, ctx);
 
   // Pagine pubbliche: nessuno script, nessuno stile in linea; risorse con la versione nell'indirizzo.
   const PAGE_CSP = "default-src 'none'; style-src 'self'; img-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'";
@@ -137,6 +139,14 @@ export async function buildApp(cfg: Config, db: Db, opts: { mailer?: Mailer } = 
   const logo = readFileSync(join(APP_ROOT, "public", "startapp-logo.png"));
   app.get("/", async (_req, reply) => reply.type("text/html; charset=utf-8").header("Content-Security-Policy", PAGE_CSP).send(landing));
   app.get("/privacy", async (_req, reply) => reply.type("text/html; charset=utf-8").header("Content-Security-Policy", PAGE_CSP).send(privacy));
+  // Pagina pubblica per aprire un invio sicuro: script solo dallo stesso server, nessuna risorsa esterna,
+  // nessun referrer. Il token resta nel frammento (#) e il codice non lascia mai il browser.
+  const sendPage = page("send.html");
+  const sendJs = readFileSync(join(APP_ROOT, "public", "send.js"));
+  const SEND_CSP = "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self'; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'";
+  app.get("/s", async (_req, reply) => reply.type("text/html; charset=utf-8").header("Content-Security-Policy", SEND_CSP)
+    .header("Referrer-Policy", "no-referrer").header("X-Robots-Tag", "noindex, nofollow").send(sendPage));
+  app.get("/send.js", async (_req, reply) => reply.type("text/javascript; charset=utf-8").header("Cache-Control", IMMUTABLE).send(sendJs));
   app.get("/site.css", async (_req, reply) => reply.type("text/css; charset=utf-8").header("Cache-Control", IMMUTABLE).send(siteCss));
   app.get("/startapp-logo.png", async (_req, reply) => reply.type("image/png").header("Cache-Control", IMMUTABLE).send(logo));
   app.get("/download/startcredentials-extension.zip", async (_req, reply) => {

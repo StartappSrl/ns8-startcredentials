@@ -13,6 +13,13 @@
     "test": "npm test -w packages/crypto && npm test -w app"
   },
   "overrides": {
-    "@xmldom/xmldom": "0.8.10"
+    "@xmldom/xmldom": "0.8.15",
+    "fast-uri": "4.2.3",
+    "ajv": {
+      "fast-uri": "3.1.9"
+    },
+    "kdbxweb": {
+      "fflate": "0.8.3"
+    }
   }
 }

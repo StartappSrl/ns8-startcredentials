@@ -1,7 +1,9 @@
 import { ComponentChildren } from "preact";
 import { useEffect, useMemo, useRef, useState } from "preact/hooks";
-import { Container, DirectoryUser, effectiveTotpUri, Folder, generatePassword, Item, ItemData, KEEPASS_TOTP_FIELDS, Permission, Vault } from "@startcredentials/client";
-import { download, initials, loadCollapsed, lock, relTime, saveCollapsed, signOut, tint } from "../shared";
+import {
+  Container, DirectoryUser, effectiveTotpUri, Folder, generatePassword, Item, ItemData, KEEPASS_TOTP_FIELDS, Permission, serverStatus, Vault,
+} from "@startcredentials/client";
+import { download, initials, loadCollapsed, loadVersions, lock, relTime, saveCollapsed, signOut, tint } from "../shared";
 import { Brand, CopyButton, Dialog, ErrorNote, Meter, OtpCode, Secret, useAction, useLoad, useToast } from "./kit";
 
 /** Indirizzo apribile: senza protocollo si usa HTTPS; solo http/https sono ammessi. */
@@ -75,6 +77,7 @@ export function Shell({ vault, route, children, counts }: { vault: Vault; route:
             <svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="10" width="16" height="11" rx="2" /><path d="M8 10V7a4 4 0 0 1 8 0v3" /></svg>
           </button>
         </div>
+        <VersionLine />
       </nav>
       <main class="main">{children}</main>
     </div>
@@ -82,6 +85,19 @@ export function Shell({ vault, route, children, counts }: { vault: Vault; route:
 }
 
 // ------------------------------------------------------------------ elenco clienti
+
+/** Versioni in fondo alla barra laterale, con avviso se estensione e server non sono allineati. */
+function VersionLine() {
+  const v = useLoad(() => loadVersions(), []);
+  if (!v.data) return null;
+  return (
+    <div class="version-line" title={v.data.mismatch ? "Estensione e server hanno versioni diverse: aggiorna l'estensione" : undefined}>
+      <span>Estensione {v.data.extension}</span>
+      <span>Server {v.data.server ?? "non raggiungibile"}</span>
+      {v.data.mismatch && <a href="#/impostazioni" class="version-warn">Versioni non allineate</a>}
+    </div>
+  );
+}
 
 export function Clients({ vault, containers, reload, shared }: { vault: Vault; containers: Container[]; reload: () => void; shared?: boolean }) {
   const [q, setQ] = useState("");
@@ -679,6 +695,8 @@ export function folderPath(folders: Folder[], id: string | null): string {
 export function ItemDetail({ vault, item, canWrite, canShare, folders, onEdit, onChanged, onDeleted }: {
   vault: Vault; item: Item; canWrite: boolean; canShare?: boolean; folders: Folder[]; onEdit: () => void; onChanged: () => void; onDeleted: () => void;
 }) {
+  const [sending, setSending] = useState(false);
+  const sendPolicy = useLoad(() => serverStatus(vault.api), []);
   const d = item.data;
   const [sharing, setSharing] = useState(false);
   const [history, setHistory] = useState(false);
@@ -771,6 +789,9 @@ export function ItemDetail({ vault, item, canWrite, canShare, folders, onEdit, o
         {canWrite && !item.deletedAt && <button class="btn sm" onClick={onEdit}>Modifica</button>}
         {!item.sharedBy && <button class="btn sm" onClick={() => setHistory(true)}>Cronologia</button>}
         {canShare && !item.deletedAt && <button class="btn sm" onClick={() => setSharing(true)}>Condividi solo questa password{item.shares ? ` (${item.shares})` : ""}</button>}
+        {canWrite && !item.deletedAt && !item.sharedBy && sendPolicy.data?.policy?.secureSend?.enabled !== false && (
+          <button class="btn sm" onClick={() => setSending(true)}>Invia in modo sicuro</button>
+        )}
         {canWrite && (item.deletedAt
           ? <button class="btn sm" onClick={() => run(async () => { await vault.restoreItem(item.id); onDeleted(); })}>Ripristina</button>
           : <button class="btn sm ghost danger" onClick={() => run(async () => { await vault.deleteItem(item.id); onDeleted(); })}>Sposta nel cestino</button>)}
@@ -778,6 +799,7 @@ export function ItemDetail({ vault, item, canWrite, canShare, folders, onEdit, o
       <div class="small muted">Modificato da {item.updatedBy} · {relTime(item.updatedAt)} · revisione {item.revision}</div>
       {history && <HistoryDialog vault={vault} item={item} onClose={() => setHistory(false)} />}
       {sharing && <ItemShareDialog vault={vault} item={item} onClose={() => { setSharing(false); onChanged(); }} />}
+      {sending && <SecureSendDialog vault={vault} item={item} policy={sendPolicy.data?.policy?.secureSend} onClose={() => setSending(false)} />}
       {item.sharedBy && <div class="notice info">Condivisa con te da {item.sharedBy}, in sola lettura.</div>}
     </div>
   );
@@ -973,6 +995,85 @@ function ShareDialog({ vault, container, onClose }: { vault: Vault; container: C
           </div>
         </Dialog>
       )}
+    </Dialog>
+  );
+}
+
+/** Invio sicuro a un destinatario anche esterno: cifrato qui, codice da comunicare a parte. */
+function SecureSendDialog({ vault, item, policy, onClose }: {
+  vault: Vault; item: Item; policy?: { enabled: boolean; maxHours: number; domains: string[] }; onClose: () => void;
+}) {
+  const maxHours = policy?.maxHours ?? 168;
+  const durations = ([[1, "1 ora"], [24, "1 giorno"], [72, "3 giorni"], [168, "7 giorni"], [336, "14 giorni"], [720, "30 giorni"]] as const)
+    .filter(([h]) => h <= maxHours);
+  const [to, setTo] = useState("");
+  const [hours, setHours] = useState<number>(durations.find(([h]) => h === 24)?.[0] ?? durations[0]![0]);
+  const [views, setViews] = useState(1);
+  const d = item.data;
+  const otp = effectiveTotpUri(d);
+  const [fields, setFields] = useState({ username: !!d.username, password: !!d.password, urls: !!d.urls?.length, notes: false, otp: false });
+  const [res, setRes] = useState<{ code: string; link: string; emailed: boolean } | null>(null);
+  const { busy, error, run } = useAction();
+  const toggle = (k: keyof typeof fields) => setFields({ ...fields, [k]: !fields[k] });
+  const opts: [keyof typeof fields, string, boolean][] = [
+    ["username", "Nome utente", !!d.username], ["password", "Password", !!d.password], ["urls", "Indirizzi dei siti", !!d.urls?.length],
+    ["notes", "Note", !!d.notes], ["otp", "Chiave OTP", !!otp],
+  ];
+  if (res) {
+    return (
+      <Dialog title="Invio sicuro creato" onClose={onClose}>
+        <div class="stack">
+          <div class={`notice ${res.emailed ? "ok" : "warn"}`}>
+            {res.emailed ? `Collegamento inviato per email a ${to.trim().toLowerCase()}.` : "Email non inviata: manda tu il collegamento qui sotto."}
+          </div>
+          <label class="field">Codice di accesso: comunicalo per un canale diverso dall'email (SMS, WhatsApp, telefono). Non viene salvato: annotalo ora se serve.
+            <div class="input-group"><div class="share-box mono" style="font-size:18px;letter-spacing:2px;flex:1">{res.code}</div><CopyButton value={res.code} /></div>
+          </label>
+          <label class="field">Collegamento (già nell'email; serve solo per un invio manuale)
+            <div class="input-group"><input class="input mono" readOnly value={res.link} /><CopyButton value={res.link} /></div>
+          </label>
+          <p class="small muted">Riceverai un'email a ogni apertura. Puoi revocare l'invio da Impostazioni → Invii sicuri.</p>
+          <div class="row" style="justify-content:flex-end"><button class="btn primary" onClick={onClose}>Fatto</button></div>
+        </div>
+      </Dialog>
+    );
+  }
+  return (
+    <Dialog title={`Invia in modo sicuro: ${d.name}`} onClose={onClose}>
+      <form class="stack" onSubmit={(e) => {
+        e.preventDefault();
+        run(async () => setRes(await vault.createSecureSend(item, { recipientEmail: to, expiresInHours: hours, maxViews: views, fields })));
+      }}>
+        <p class="small muted">I dati scelti vengono cifrati qui. Il destinatario riceve per email un collegamento; per aprirlo serve un codice che gli comunicherai tu per un altro canale.</p>
+        <label class="field">Email del destinatario
+          <input class="input" type="email" required value={to} onInput={(e) => setTo(e.currentTarget.value)} placeholder="referente@cliente.it" />
+        </label>
+        {policy?.domains?.length ? <p class="small muted">Domini ammessi: {policy.domains.join(", ")}</p> : null}
+        <fieldset class="stack" style="border:0;padding:0;margin:0;gap:6px">
+          <legend class="small muted" style="margin-bottom:4px">Cosa inviare</legend>
+          {opts.filter(([, , has]) => has).map(([k, label]) => (
+            <label class="check"><input type="checkbox" checked={fields[k]} onChange={() => toggle(k)} /> {label}</label>
+          ))}
+          {fields.otp && <div class="notice warn">Con la chiave OTP il destinatario potrà generare codici anche in futuro, finché non la cambi alla fonte.</div>}
+        </fieldset>
+        <div class="row">
+          <label class="field grow">Scadenza
+            <select class="input" value={hours} onChange={(e) => setHours(Number(e.currentTarget.value))}>
+              {durations.map(([h, l]) => <option value={h}>{l}</option>)}
+            </select>
+          </label>
+          <label class="field grow">Aperture consentite
+            <select class="input" value={views} onChange={(e) => setViews(Number(e.currentTarget.value))}>
+              {[1, 2, 3, 5].map((n) => <option value={n}>{n === 1 ? "Una sola" : n}</option>)}
+            </select>
+          </label>
+        </div>
+        <ErrorNote error={error} />
+        <div class="row" style="justify-content:flex-end">
+          <button type="button" class="btn" onClick={onClose}>Annulla</button>
+          <button class="btn primary" disabled={busy || !Object.values(fields).some(Boolean)}>{busy ? "Cifratura…" : "Crea l'invio"}</button>
+        </div>
+      </form>
     </Dialog>
   );
 }

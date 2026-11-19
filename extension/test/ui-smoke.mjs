@@ -4,6 +4,7 @@
  * Uso: node test/ui-smoke.mjs (richiede PostgreSQL di test).
  */
 import { JSDOM } from "jsdom";
+import { readFileSync } from "node:fs";
 import { randomBytes, createHmac } from "node:crypto";
 import { createRequire } from "node:module";
 import { mkdtempSync } from "node:fs";
@@ -59,7 +60,8 @@ const messages = [];
 globalThis.chrome = w.chrome = {
   storage: { local: area(), session: area() },
   permissions: { contains: async () => true, request: async () => true },
-  runtime: { id: "testid", sendMessage: async (m) => { messages.push(m); }, getURL: (p) => `chrome-extension://testid/${p}` },
+  runtime: { id: "testid", sendMessage: async (m) => { messages.push(m); }, getURL: (p) => `chrome-extension://testid/${p}`,
+    getManifest: () => JSON.parse(readFileSync(new URL("../static/manifest.json", import.meta.url), "utf8")) },
   tabs: { create: async () => undefined, query: async () => [] },
 };
 
@@ -167,6 +169,13 @@ try {
   await click("Ho stampato e consegnato le quote");
   await waitText("Organizzazione attiva");
   step("organizzazione inizializzata, 3 quote di recupero");
+
+  const ver = JSON.parse(readFileSync(new URL("../static/manifest.json", import.meta.url), "utf8")).version;
+  const serverVer = (await (await fetch(`${serverUrl}/api/v1/version`)).json()).version;
+  await waitFor(() => w.document.querySelector(".version-line")?.textContent.includes(`Server ${serverVer}`), "versioni nella barra laterale");
+  assert.ok(w.document.querySelector(".version-line").textContent.includes(`Estensione ${ver}`));
+  assert.ok(!w.document.querySelector(".version-warn"), "versioni allineate: nessun avviso");
+  step("versioni di estensione e server nella barra laterale");
 
   await nav("#/clienti");
   await waitText("Non hai ancora clienti");
@@ -286,6 +295,18 @@ try {
   await click("Espandi tutto").catch(() => undefined);
   const msRow = await waitFor(() => [...w.document.querySelectorAll("[data-item]")].find((r) => r.textContent.includes("Microsoft 365")), "riga Microsoft 365");
   msRow.dispatchEvent(new w.MouseEvent("click", { bubbles: true }));
+  // Invio sicuro a un destinatario esterno.
+  await waitFor(() => [...w.document.querySelectorAll("button")].some((b) => b.textContent === "Invia in modo sicuro"), "pulsante di invio sicuro");
+  await click("Invia in modo sicuro");
+  type("Email del destinatario", "referente@cliente.it");
+  await click("Crea l'invio");
+  await waitText("Invio sicuro creato", 60000);
+  const sendCode = [...w.document.querySelectorAll(".dialog .share-box")].map((x) => x.textContent).find((t) => /^[A-Z2-9]{4}(-[A-Z2-9]{4}){3}$/.test(t));
+  assert.ok(sendCode, "codice di accesso mostrato al mittente");
+  // In questo test il server non ha un servizio email: l'estensione deve dirlo e offrire il collegamento.
+  assert.ok(text().includes("Collegamento inviato per email a referente@cliente.it") || text().includes("Email non inviata: manda tu il collegamento"));
+  await click("Fatto");
+  step("invio sicuro creato dal dettaglio: codice mostrato al mittente, esito dell'email indicato");
   await waitFor(() => [...w.document.querySelectorAll("button")].some((b) => b.textContent.startsWith("Condividi solo questa password")), "pulsante di condivisione singola");
   [...w.document.querySelectorAll("button")].find((b) => b.textContent.startsWith("Condividi solo questa password")).dispatchEvent(new w.MouseEvent("click", { bubbles: true }));
   await waitFor(() => [...(byLabel("Collega")?.options ?? [])].some((o) => o.value === reg.userId), "Laura tra i colleghi");
@@ -369,6 +390,11 @@ try {
   await nav("#/impostazioni");
   await waitText("Codici MFA di riserva");
   await waitText("10 codici ancora disponibili");
+  type("Email di recupero", "marco.personale@example.org");
+  const saveRec = byLabel("Email di recupero").nextElementSibling;
+  saveRec.dispatchEvent(new w.MouseEvent("click", { bubbles: true }));
+  await waitFor(() => saveRec.disabled && byLabel("Email di recupero").value === "marco.personale@example.org", "email di recupero salvata");
+  step("email di recupero impostata nelle impostazioni");
   await click("Cambia");
   type("Master password attuale", "una frase lunga per la cassaforte");
   type("Nuova master password", "nuova frase lunga per la cassaforte");

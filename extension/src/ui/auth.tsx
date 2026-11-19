@@ -1,7 +1,7 @@
 import { ComponentChildren } from "preact";
-import { useState } from "preact/hooks";
+import { useEffect, useState } from "preact/hooks";
 import {
-  Api, completeRecovery, enableMfa, login, register, serverStatus, setupMfa, trustDevice, Vault, verifyMfa,
+  Api, completeRecovery, enableMfa, login, passwordPolicy, register, serverStatus, setupMfa, trustDevice, Vault, verifyMfa,
 } from "@startcredentials/client";
 import { api, deviceName, ensureServerPermission, getDeviceTrust, getSettings, saveDeviceTrust, saveSettings, saveToken, signOut, storeVault } from "../shared";
 import { Brand, CopyButton, ErrorNote, Meter, Qr, strength, useAction, useLoad } from "./kit";
@@ -101,8 +101,18 @@ export function cleanToken(t: string): string {
   return t.trim().replace(/^["'“”‘’\s]+|["'“”‘’.,;:\s]+$/g, "");
 }
 
+/** Lunghezza minima decisa dall'azienda (letta dal server; l'SDK la applica comunque). */
+let minLength = 12;
+async function loadPolicy(): Promise<void> {
+  try {
+    minLength = (await passwordPolicy(await api())).minPasswordLength;
+  } catch {
+    /* server non raggiungibile: resta il minimo predefinito */
+  }
+}
+
 function checkPw(pw: string, pw2: string): string | null {
-  if ([...pw].length < 12) return "La master password deve avere almeno 12 caratteri.";
+  if ([...pw].length < minLength) return `La master password deve avere almeno ${minLength} caratteri.`;
   if (pw !== pw2) return "Le due password non coincidono.";
   if (strength(pw).score < 0.45) return "Password troppo debole: allungala o aggiungi parole.";
   return null;
@@ -110,6 +120,7 @@ function checkPw(pw: string, pw2: string): string | null {
 
 /** Registrazione da invito, oppure bootstrap del primo amministratore. */
 export function Register({ token, bootstrap, onDone }: { token?: string; bootstrap?: boolean; onDone: (password: string) => void }) {
+  useEffect(() => { void loadPolicy(); }, []);
   const [tok, setTok] = useState(token ?? "");
   const [email, setEmail] = useState("");
   const [name, setName] = useState("");
@@ -309,6 +320,7 @@ export function Unlock({ onDone }: { onDone: (v: Vault) => void }) {
 }
 
 export function Recover({ token, onDone }: { token: string; onDone: () => void }) {
+  useEffect(() => { void loadPolicy(); }, []);
   const [code, setCode] = useState("");
   const [pw, setPw] = useState("");
   const [pw2, setPw2] = useState("");

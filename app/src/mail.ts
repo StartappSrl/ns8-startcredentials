@@ -7,6 +7,8 @@ export interface Mailer {
 }
 
 /** Usa lo smarthost del cluster NethServer quando configurato. */
+const SIMPLE_ADDRESS = /^[^\s@<>()[\],;:"\\]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$/;
+
 export function createMailer(cfg: Config, onError: (e: unknown) => void = () => undefined): Mailer {
   if (!cfg.smtp) return { enabled: false, send: async () => false };
   const t = nodemailer.createTransport({
@@ -21,8 +23,14 @@ export function createMailer(cfg: Config, onError: (e: unknown) => void = () => 
   return {
     enabled: true,
     async send(to, subject, text) {
+      // Un solo indirizzo semplice: niente elenchi, nomi, commenti, a capo o parentesi angolari.
+      // Gli indirizzi arrivano già validati; questa è una seconda difesa contro i dirottamenti.
+      if (!SIMPLE_ADDRESS.test(to) || to.length > 254) {
+        onError(new Error("Indirizzo email non valido"));
+        return false;
+      }
       try {
-        await t.sendMail({ from: cfg.smtp!.from, to, subject, text });
+        await t.sendMail({ from: cfg.smtp!.from, to: { name: "", address: to }, subject, text });
         return true;
       } catch (e) {
         onError(e);

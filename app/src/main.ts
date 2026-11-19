@@ -1,5 +1,6 @@
 import { join } from "node:path";
 import { createPool, loadConfig, migrate, pruneAudit } from "./core.js";
+import { purgeExpiredSends } from "./routes/sends.js";
 import { APP_ROOT, buildApp } from "./server.js";
 
 const cfg = loadConfig();
@@ -25,6 +26,8 @@ const cleanup = async () => {
     await db.query("DELETE FROM items WHERE deleted_at < now() - interval '30 days'");
     await db.query("DELETE FROM attachments WHERE status = 'uploading' AND created_at < now() - interval '1 day'");
     await db.query("UPDATE users SET invite_token_hash = NULL WHERE invite_expires_at < now() - interval '30 days'");
+    const purged = await purgeExpiredSends(db);
+    if (purged) app.log.info({ purged }, "Invii sicuri scaduti: pacchetti cifrati cancellati");
     if (cfg.auditRetentionMonths && cfg.auditRetentionMonths > 0) {
       const before = new Date();
       before.setMonth(before.getMonth() - cfg.auditRetentionMonths);

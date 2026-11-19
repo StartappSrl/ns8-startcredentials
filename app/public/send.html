@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="it">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Invio sicuro – StartCredentials</title>
+
+<link rel="stylesheet" href="/site.css?v=__VERSION__">
+</head>
+<body>
+<main>
+<img class="logo" src="/startapp-logo.png?v=__VERSION__" alt="StartApp">
+<h1>Credenziali inviate in modo sicuro</h1>
+<section id="sc-intro">
+<p>Inserisci il codice di accesso che ti ha comunicato chi ti ha inviato il messaggio. Il codice non è nell'email: lo ricevi per un altro canale.</p>
+<p><label for="sc-code">Codice di accesso</label><br><input id="sc-code" class="code-input" autocomplete="off" autocapitalize="characters" spellcheck="false" placeholder="XXXX-XXXX-XXXX-XXXX"></p>
+<p id="sc-views" class="muted"></p>
+<p><button id="sc-open" class="btn" type="button">Apri</button></p>
+</section>
+<p id="sc-error" class="error" role="alert" hidden></p>
+<section id="sc-result" hidden>
+<p id="sc-from" class="muted"></p>
+<h2 id="sc-name"></h2>
+<div id="sc-fields"></div>
+<p class="muted" id="sc-left"></p>
+<p><button id="sc-close" class="btn" type="button">Chiudi e cancella dalla pagina</button></p>
+</section>
+<p class="muted small">La decifratura avviene solo in questo browser: né il server né l'email contengono il contenuto in chiaro. <a href="/privacy">Informativa privacy</a></p>
+</main>
+<script src="/send.js?v=__VERSION__"></script>
+</body>
+</html>
