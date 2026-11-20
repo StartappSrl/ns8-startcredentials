@@ -14,7 +14,7 @@
     "@serenity-kit/opaque": "1.1.0",
     "@startcredentials/crypto": "0.7.10",
     "fflate": "0.8.3",
-    "hash-wasm": "4.12.0",
+    "hash-wasm": "4.13.0",
     "kdbxweb": "2.1.1",
     "shamir-secret-sharing": "0.0.4"
   },
