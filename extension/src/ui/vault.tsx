@@ -437,8 +437,15 @@ export function ContainerView({ vault, id, focusItem, onChanged }: { vault: Vaul
   const [confirmBulk, setConfirmBulk] = useState(false);
   const [moveOpen, setMoveOpen] = useState(false);
   const [moveTarget, setMoveTarget] = useState("");
+  // Trascinamento di elementi sulle cartelle: identificativi trascinati e cartella sotto il puntatore ("" = senza cartella).
+  const [dragging, setDragging] = useState<string[] | null>(null);
+  const [dropOver, setDropOver] = useState<string | null>(null);
+  // Cartella aperta nella colonna centrale (null = elementi senza cartella) e colonna visibile sugli schermi stretti.
+  const [folder, setFolder] = useState<string | null>(null);
+  const [pane, setPane] = useState<"folders" | "items" | "detail">("folders");
   const bulk = useAction();
   useEffect(() => { setChecked(new Set()); }, [tab, id]);
+  useEffect(() => { setFolder(null); setSelected(null); setPane("folders"); }, [id]);
   useEffect(() => { setExpanded(new Set()); void loadExpanded(id).then((ids) => setExpanded(new Set(ids))); }, [id]);
   const info = useLoad(() => vault.container(id), [id]);
   const items = useLoad(() => vault.items(id, { trash: tab === "trash" }), [id, tab === "trash"]);
@@ -464,6 +471,8 @@ export function ContainerView({ vault, id, focusItem, onChanged }: { vault: Vaul
     setTab("all");
     setQ("");
     setSelected(it.id);
+    setFolder(it.folderId ?? null);
+    setPane("detail");
     const ancestors = new Set<string>();
     let f = info.data.folders.find((x) => x.id === it.folderId);
     for (let guard = 0; f && guard < 50; guard++) {
@@ -497,15 +506,13 @@ export function ContainerView({ vault, id, focusItem, onChanged }: { vault: Vaul
   const t = tint(c.id);
   const reloadAll = () => { items.reload(); info.reload(); onChanged(); };
 
-  // Albero delle cartelle: figli ordinati per nome, conteggi comprensivi delle sottocartelle.
+  // Cartelle: figli ordinati per nome. Ogni cartella mostra solo i propri elementi (non quelli delle sottocartelle).
   const children = new Map<string | null, Folder[]>();
   for (const f of c.folders) {
     const k = f.parentId ?? null;
     children.set(k, [...(children.get(k) ?? []), f].sort((a, b) => a.name.localeCompare(b.name, "it")));
   }
   const itemsIn = (fid: string | null) => visible.filter((i) => (i.folderId ?? null) === fid);
-  const countDeep = (fid: string): number => itemsIn(fid).length + (children.get(fid) ?? []).reduce((n, ch) => n + countDeep(ch.id), 0);
-  const deepItems = (fid: string): Item[] => [...itemsIn(fid), ...(children.get(fid) ?? []).flatMap((ch) => deepItems(ch.id))];
   // Aggiornamenti calcolati sullo stato più recente: clic rapidi non si sovrascrivono.
   const toggleItem = (iid: string) => setChecked((prev) => {
     const next = new Set(prev);
@@ -513,18 +520,6 @@ export function ContainerView({ vault, id, focusItem, onChanged }: { vault: Vaul
     else next.add(iid);
     return next;
   });
-  const toggleFolder = (fid: string) => {
-    const ids = deepItems(fid).map((i) => i.id);
-    setChecked((prev) => {
-      const all = ids.length > 0 && ids.every((x) => prev.has(x));
-      const next = new Set(prev);
-      for (const x of ids) {
-        if (all) next.delete(x);
-        else next.add(x);
-      }
-      return next;
-    });
-  };
   const endSelection = () => { setSelecting(false); setChecked(new Set()); };
   const runMove = () => bulk.run(async () => {
     const n = await vault.moveItems(id, [...checked], moveTarget || null);
@@ -543,8 +538,13 @@ export function ContainerView({ vault, id, focusItem, onChanged }: { vault: Vaul
     toast(action === "delete" ? `${n} ${n === 1 ? "elemento spostato" : "elementi spostati"} nel cestino` : `${n} ${n === 1 ? "elemento ripristinato" : "elementi ripristinati"}`);
   });
 
-  // Con ricerca o filtri attivi si aprono solo le cartelle che contengono risultati.
+  // Ricerca, filtri per tipo e cestino lavorano su tutto il cliente; altrimenti si vede la cartella aperta.
   const filtering = !!q || tab !== "all";
+  const showFolders = c.folders.length > 0 && tab !== "trash";
+  const cur = folder && c.folders.some((f) => f.id === folder) ? folder : null;
+  const shown = filtering ? visible : itemsIn(cur);
+  const listTitle = tab === "trash" ? "Cestino" : filtering ? "Risultati in tutto il cliente" : cur ? folderPath(c.folders, cur) : "Senza cartella";
+  const effPane = pane === "folders" && !showFolders ? "items" : pane === "detail" && !sel ? "items" : pane;
   const toggle = (fid: string) => setExpanded((prev) => {
     const next = new Set(prev);
     if (next.has(fid)) next.delete(fid);
@@ -557,57 +557,125 @@ export function ContainerView({ vault, id, focusItem, onChanged }: { vault: Vaul
     setExpanded(next);
     void saveExpanded(id, [...next]);
   };
+  const openFolder = (fid: string | null) => {
+    if (filtering) { setQ(""); setTab("all"); }
+    setFolder(fid);
+    setSelected(null);
+    setPane("items");
+    if (fid && (children.get(fid) ?? []).length > 0 && !expanded.has(fid)) toggle(fid);
+  };
 
-  const itemContent = (i: Item) => (
-    <>
-      <span class="kind">{TYPE_TAG[i.type]}</span>
-      <span class="grow">
-        <span class="ellipsis" style="display:block;font-weight:500">{i.data.name}</span>
-        <span class="ellipsis small muted" style="display:block">{i.data.username || (i.data.urls?.[0] ?? TYPE_LABEL[i.type])}</span>
-      </span>
-      <span class="small muted">{[effectiveTotpUri(i.data) && "OTP", i.attachments.length && `${i.attachments.length} file`].filter(Boolean).join(" · ")}</span>
-    </>
-  );
-  const renderItem = (i: Item, depth: number) => selecting ? (
-    <label class={`item-row${checked.has(i.id) ? " on" : ""}`} data-item={i.id} style={`padding-left:${18 + depth * 20}px;cursor:pointer`}>
-      <input type="checkbox" class="row-check" checked={checked.has(i.id)} onChange={() => toggleItem(i.id)} aria-label={`Seleziona ${i.data.name}`} />
-      {itemContent(i)}
-    </label>
-  ) : (
-    <button class={`item-row${i.id === selected ? " on" : ""}`} data-item={i.id} aria-current={i.id === selected ? "true" : undefined} style={`padding-left:${18 + depth * 20}px`} onClick={() => setSelected(i.id)}>
-      {itemContent(i)}
-    </button>
-  );
-
-  const renderFolder = (f: Folder, depth: number): ComponentChildren => {
-    const n = countDeep(f.id);
-    if (filtering && n === 0) return null;
-    const open = filtering || expanded.has(f.id);
-    const kids = children.get(f.id) ?? [];
+  const itemContent = (i: Item, withPath: boolean) => {
+    const sub = i.data.username || (i.data.urls?.[0] ?? TYPE_LABEL[i.type]);
+    const path = withPath && i.folderId ? folderPath(c.folders, i.folderId) : "";
     return (
       <>
-        <div class="group-h" style={`padding-left:${10 + depth * 20}px`}>
-          {selecting && n > 0 && (
-            <input type="checkbox" class="row-check" aria-label={`Seleziona tutta la cartella ${f.name}`}
-              checked={deepItems(f.id).every((x) => checked.has(x.id))} onChange={() => toggleFolder(f.id)} />
-          )}
-          <button class="folder-toggle" aria-expanded={open} disabled={filtering} onClick={() => toggle(f.id)}>
-            <svg class={`chevron${open ? " open" : ""}`} aria-hidden="true" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M9 6l6 6-6 6" /></svg>
-            <span>{f.name}</span>
-          </button>
-          <span class="row" style="gap:6px">
-            {n}
-            {canWrite && !filtering && n === 0 && kids.length === 0 && (
-              <button class="btn ghost sm" style="min-height:24px;padding:0 6px" onClick={async () => { await vault.deleteFolder(f.id); info.reload(); }}>Elimina</button>
-            )}
-          </span>
-        </div>
-        {open && itemsIn(f.id).map((i) => renderItem(i, depth + 1))}
-        {open && kids.map((k) => renderFolder(k, depth + 1))}
+        <span class="kind">{TYPE_TAG[i.type]}</span>
+        <span class="grow">
+          <span class="ellipsis" style="display:block;font-weight:500">{i.data.name}</span>
+          <span class="ellipsis small muted" style="display:block">{path ? `${path} · ${sub}` : sub}</span>
+        </span>
+        <span class="small muted">{[effectiveTotpUri(i.data) && "OTP", i.attachments.length && `${i.attachments.length} file`].filter(Boolean).join(" · ")}</span>
       </>
     );
   };
-  const rootItems = itemsIn(null);
+  // Trascinamento: si sposta l'elemento, oppure tutti i selezionati se si trascina uno di loro.
+  const canDrag = canWrite && tab !== "trash";
+  const DRAG_TYPE = "application/x-startcredentials-items";
+  const dragProps = (i: Item) => !canDrag ? {} : {
+    draggable: true,
+    title: "Trascina su una cartella per spostarlo",
+    onDragStart: (e: DragEvent) => {
+      const ids = selecting && checked.has(i.id) ? [...checked] : [i.id];
+      e.dataTransfer?.setData(DRAG_TYPE, ids.join(","));
+      if (e.dataTransfer) e.dataTransfer.effectAllowed = "move";
+      setDragging(ids);
+    },
+    onDragEnd: () => { setDragging(null); setDropOver(null); },
+  };
+  const dropTarget = (folderId: string | null) => {
+    const key = folderId ?? "";
+    return !canDrag ? {} : {
+      onDragOver: (e: DragEvent) => {
+        if (!dragging) return;
+        e.preventDefault();
+        if (e.dataTransfer) e.dataTransfer.dropEffect = "move";
+        if (dropOver !== key) setDropOver(key);
+      },
+      onDragLeave: (e: DragEvent) => {
+        const to = e.relatedTarget as Node | null;
+        if (!to || !(e.currentTarget as HTMLElement).contains(to)) setDropOver((now) => (now === key ? null : now));
+      },
+      onDrop: (e: DragEvent) => {
+        e.preventDefault();
+        const ids = dragging ?? (e.dataTransfer?.getData(DRAG_TYPE) || "").split(",").filter(Boolean);
+        setDragging(null);
+        setDropOver(null);
+        void dropItems(ids, folderId);
+      },
+    };
+  };
+  const dropItems = async (ids: string[], folderId: string | null) => {
+    const toMove = ids.filter((x) => (all.find((i) => i.id === x)?.folderId ?? null) !== folderId);
+    if (!toMove.length) return;
+    try {
+      const n = await vault.moveItems(id, toMove, folderId);
+      if (selecting) setChecked(new Set());
+      reloadAll();
+      const dest = folderId ? `in «${c.folders.find((f) => f.id === folderId)?.name ?? "cartella"}»` : "fuori dalle cartelle";
+      toast(`${n} ${n === 1 ? "elemento spostato" : "elementi spostati"} ${dest}`);
+    } catch (err) {
+      toast(`Spostamento non riuscito: ${errorText(err)}`);
+    }
+  };
+  const dragClass = (i: Item) => (dragging?.includes(i.id) ? " dragging" : "");
+
+  const renderItem = (i: Item) => selecting ? (
+    <label class={`item-row${checked.has(i.id) ? " on" : ""}${dragClass(i)}`} data-item={i.id} style="cursor:pointer" {...dragProps(i)}>
+      <input type="checkbox" class="row-check" checked={checked.has(i.id)} onChange={() => toggleItem(i.id)} aria-label={`Seleziona ${i.data.name}`} />
+      {itemContent(i, filtering)}
+    </label>
+  ) : (
+    <button class={`item-row${i.id === selected ? " on" : ""}${dragClass(i)}`} data-item={i.id} aria-current={i.id === selected ? "true" : undefined}
+      onClick={() => { setSelected(i.id); setPane("detail"); }} {...dragProps(i)}>
+      {itemContent(i, filtering)}
+    </button>
+  );
+
+  const chevron = (open: boolean) => (
+    <svg class={`chevron${open ? " open" : ""}`} aria-hidden="true" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M9 6l6 6-6 6" /></svg>
+  );
+  const folderIcon = (root: boolean) => (
+    <svg class="folder-ico" aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      {root ? <path d="M4 13h4l1 3h6l1-3h4M4 13l2-8h12l2 8v6H4z" /> : <path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" />}
+    </svg>
+  );
+  const folderRow = (f: Folder | null, depth: number): ComponentChildren => {
+    const fid = f?.id ?? null;
+    const kids = fid ? children.get(fid) ?? [] : [];
+    const open = !!fid && expanded.has(fid);
+    const n = itemsIn(fid).length;
+    const active = !filtering && cur === fid;
+    const name = f ? f.name : "Senza cartella";
+    return (
+      <>
+        <div class={`folder-row${active ? " on" : ""}${dropOver === (fid ?? "") ? " drop-over" : ""}`} style={`padding-left:${6 + depth * 16}px`} {...dropTarget(fid)}>
+          {kids.length > 0
+            ? <button class="folder-chev" aria-expanded={open} aria-label={`${open ? "Chiudi" : "Apri"} le sottocartelle di ${name}`} onClick={() => toggle(fid!)}>{chevron(open)}</button>
+            : <span class="folder-chev" aria-hidden="true" />}
+          <button class="folder-name" aria-current={active ? "true" : undefined} onClick={() => openFolder(fid)}>
+            {folderIcon(!f)}<span class="ellipsis">{name}</span>
+          </button>
+          {canWrite && fid && !filtering && n === 0 && kids.length === 0 && (
+            <button class="folder-del" title="Elimina la cartella vuota" aria-label={`Elimina la cartella ${name}`}
+              onClick={async () => { await vault.deleteFolder(fid); if (cur === fid) setFolder(null); info.reload(); }}>×</button>
+          )}
+          <span class="folder-count">{n}</span>
+        </div>
+        {open && kids.map((k) => folderRow(k, depth + 1))}
+      </>
+    );
+  };
 
   return (
     <>
@@ -634,27 +702,39 @@ export function ContainerView({ vault, id, focusItem, onChanged }: { vault: Vaul
       <div class="row between">
         <div class="tabs" role="tablist">
           {([["all", "Tutto"], ["login", "Password"], ["totp", "OTP"], ["note", "Note"], ["files", "Con allegati"], ["trash", "Cestino"]] as const).map(([k, l]) => (
-            <button role="tab" aria-selected={tab === k} class={`tab${tab === k ? " on" : ""}`} onClick={() => { setTab(k); setSelected(null); }}>{l}</button>
+            <button role="tab" aria-selected={tab === k} class={`tab${tab === k ? " on" : ""}`} onClick={() => { setTab(k); setSelected(null); setPane("items"); }}>{l}</button>
           ))}
         </div>
         <div class="row" style="gap:6px">
-          {canWrite && !selecting && visible.length > 0 && <button class="btn sm" onClick={() => setSelecting(true)}>Seleziona</button>}
-          {c.folders.length > 0 && !filtering && (
+          {canWrite && !selecting && shown.length > 0 && <button class="btn sm" onClick={() => setSelecting(true)}>Seleziona</button>}
+          {showFolders && c.folders.some((f) => f.parentId) && (
             <>
               <button class="btn sm ghost" onClick={() => setAll(false)}>Espandi tutto</button>
               <button class="btn sm ghost" onClick={() => setAll(true)}>Comprimi tutto</button>
             </>
           )}
-        <input class="input" type="search" style="max-width:260px" aria-label="Cerca nel cliente" placeholder="Cerca nel cliente…" value={q} onInput={(e) => setQ(e.currentTarget.value)} />
+        <input class="input" type="search" style="max-width:260px" aria-label="Cerca nel cliente" placeholder="Cerca nel cliente…" value={q} onInput={(e) => { setQ(e.currentTarget.value); setPane("items"); }} />
         </div>
       </div>
 
-      <div class="split">
+      <div class={`cols pane-${effPane}${showFolders ? "" : " no-folders"}`}>
+        {showFolders && (
+          <nav class="card folders-col" aria-label="Cartelle">
+            <div class="col-h"><span>Cartelle</span></div>
+            {folderRow(null, 0)}
+            {(children.get(null) ?? []).map((f) => folderRow(f, 0))}
+          </nav>
+        )}
         <section class="card list" aria-label="Elementi">
+          <div class="col-h">
+            {showFolders && <button class="btn ghost sm only-narrow" onClick={() => setPane("folders")}>‹ Cartelle</button>}
+            <span class="ellipsis grow">{listTitle}</span>
+            <span>{shown.length}</span>
+          </div>
           {selecting && (
             <div class="bulk-bar" role="toolbar" aria-label="Azioni sugli elementi selezionati">
               <span class="grow" aria-live="polite"><b>{checked.size}</b> {checked.size === 1 ? "selezionato" : "selezionati"}</span>
-              <button class="btn sm ghost" onClick={() => setChecked(new Set(visible.map((i) => i.id)))}>Seleziona tutti ({visible.length})</button>
+              <button class="btn sm ghost" onClick={() => setChecked(new Set(shown.map((i) => i.id)))}>Seleziona tutti ({shown.length})</button>
               <button class="btn sm ghost" disabled={!checked.size} onClick={() => setChecked(new Set())}>Deseleziona</button>
               {tab === "trash"
                 ? <button class="btn sm primary" disabled={!checked.size || bulk.busy} onClick={() => runBulk("restore")}>Ripristina</button>
@@ -669,29 +749,29 @@ export function ContainerView({ vault, id, focusItem, onChanged }: { vault: Vaul
           )}
           {selecting && <ErrorNote error={bulk.error} />}
           {items.loading && !items.data && <div class="empty">Decifratura…</div>}
-          {items.data && visible.length === 0 && (
+          {items.data && shown.length === 0 && (
             <div class="empty">
-              <h3>{tab === "trash" ? "Il cestino è vuoto" : q ? "Nessun risultato" : "Nessun elemento"}</h3>
-              {tab !== "trash" && canWrite && !q && <button class="btn primary" onClick={() => setEditing("new")}>Aggiungi una password</button>}
+              <h3>{tab === "trash" ? "Il cestino è vuoto" : filtering ? "Nessun risultato" : cur ? "Cartella vuota" : "Nessun elemento senza cartella"}</h3>
+              {!filtering && canWrite && <button class="btn primary" onClick={() => setEditing("new")}>Aggiungi una password</button>}
+              {!filtering && canWrite && showFolders && <p class="small">Puoi anche trascinare qui le password da un'altra cartella.</p>}
               {tab === "trash" && <p class="small">Gli elementi eliminati restano qui 30 giorni.</p>}
             </div>
           )}
-          {c.folders.length > 0 && rootItems.length > 0 && <div class="group-h"><span style="padding-left:4px">Senza cartella</span><span>{rootItems.length}</span></div>}
-          {rootItems.map((i) => renderItem(i, 0))}
-          {(children.get(null) ?? []).map((f) => renderFolder(f, 0))}
+          {shown.map((i) => renderItem(i))}
         </section>
         <aside class="detail">
+          <button class="btn ghost sm only-narrow" style="margin-bottom:8px" onClick={() => setPane("items")}>‹ {listTitle}</button>
           {sel ? (
             <ItemDetail key={sel.id} vault={vault} item={sel} canWrite={canWrite} canShare={canManage && c.kind === "client"} folders={c.folders}
               onEdit={() => setEditing(sel)} onChanged={reloadAll}
-              onDeleted={() => { setSelected(null); reloadAll(); toast(tab === "trash" ? "Elemento ripristinato" : "Elemento spostato nel cestino"); }} />
+              onDeleted={() => { setSelected(null); setPane("items"); reloadAll(); toast(tab === "trash" ? "Elemento ripristinato" : "Elemento spostato nel cestino"); }} />
           ) : (
             <div class="card empty"><p>Seleziona un elemento per vederne i dettagli.</p></div>
           )}
         </aside>
       </div>
 
-      {editing && <ItemEditor vault={vault} containerId={id} folders={c.folders} item={editing === "new" ? undefined : editing}
+      {editing && <ItemEditor vault={vault} containerId={id} folders={c.folders} item={editing === "new" ? undefined : editing} defaultFolder={filtering ? null : cur}
         onClose={() => setEditing(null)} onSaved={(iid) => { setEditing(null); setSelected(iid); reloadAll(); toast("Salvato"); }} />}
       {moveOpen && (
         <Dialog title={`Spostare ${checked.size} ${checked.size === 1 ? "elemento" : "elementi"}`} onClose={() => setMoveOpen(false)}>
@@ -722,7 +802,7 @@ export function ContainerView({ vault, id, focusItem, onChanged }: { vault: Vaul
       )}
       {sharing && <ShareDialog vault={vault} container={c} onClose={() => { setSharing(false); reloadAll(); }} />}
       {editMeta && <ContainerDialog vault={vault} container={c} onClose={() => setEditMeta(false)} onSaved={() => { setEditMeta(false); reloadAll(); }} />}
-      {newFolder && <FolderDialog vault={vault} containerId={id} folders={c.folders} onClose={() => setNewFolder(false)} onSaved={() => { setNewFolder(false); info.reload(); }} />}
+      {newFolder && <FolderDialog vault={vault} containerId={id} folders={c.folders} defaultParent={filtering ? null : cur} onClose={() => setNewFolder(false)} onSaved={() => { setNewFolder(false); info.reload(); }} />}
       {canManage && c.kind === "client" && (
         <div class="row" style="justify-content:flex-end">
           <DeleteContainer vault={vault} container={c} onDeleted={() => { onChanged(); go("/clienti"); }} />
@@ -755,9 +835,9 @@ function DeleteContainer({ vault, container, onDeleted }: { vault: Vault; contai
   );
 }
 
-function FolderDialog({ vault, containerId, folders, onClose, onSaved }: { vault: Vault; containerId: string; folders: Folder[]; onClose: () => void; onSaved: () => void }) {
+function FolderDialog({ vault, containerId, folders, defaultParent, onClose, onSaved }: { vault: Vault; containerId: string; folders: Folder[]; defaultParent?: string | null; onClose: () => void; onSaved: () => void }) {
   const [name, setName] = useState("");
-  const [parent, setParent] = useState("");
+  const [parent, setParent] = useState(defaultParent ?? "");
   const { busy, error, run } = useAction();
   const options = folders.map((f) => ({ id: f.id, path: folderPath(folders, f.id) })).sort((a, b) => a.path.localeCompare(b.path, "it"));
   return (
@@ -929,8 +1009,8 @@ function HistoryDialog({ vault, item, onClose }: { vault: Vault; item: Item; onC
 
 // ------------------------------------------------------------------ editor elemento
 
-function ItemEditor({ vault, containerId, folders, item, onClose, onSaved }: {
-  vault: Vault; containerId: string; folders: Folder[]; item?: Item; onClose: () => void; onSaved: (id: string) => void;
+function ItemEditor({ vault, containerId, folders, item, defaultFolder, onClose, onSaved }: {
+  vault: Vault; containerId: string; folders: Folder[]; item?: Item; defaultFolder?: string | null; onClose: () => void; onSaved: (id: string) => void;
 }) {
   const d = item?.data;
   const [type, setType] = useState<ItemData["type"]>(d?.type ?? "login");
@@ -942,7 +1022,7 @@ function ItemEditor({ vault, containerId, folders, item, onClose, onSaved }: {
   const legacyTotp = !!d && !d.totpUri && !!effectiveTotpUri(d);
   const [totp, setTotp] = useState(d ? effectiveTotpUri(d) ?? "" : "");
   const [notes, setNotes] = useState(d?.notes ?? "");
-  const [folderId, setFolderId] = useState(item?.folderId ?? "");
+  const [folderId, setFolderId] = useState(item ? item.folderId ?? "" : defaultFolder ?? "");
   const [fields, setFields] = useState((d?.fields ?? []).filter((f) => !legacyTotp || !KEEPASS_TOTP_FIELDS.includes(f.label)));
   const { busy, error, setError, run } = useAction();
 

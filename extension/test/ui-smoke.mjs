@@ -196,17 +196,25 @@ try {
   await waitFor(() => byLabel("Dentro la cartella")?.options.length > 1, "scelta della cartella madre");
   type("Dentro la cartella", byLabel("Dentro la cartella").options[1].value);
   await click("Crea cartella");
-  await waitFor(() => [...w.document.querySelectorAll(".folder-toggle")].some((b) => b.textContent === "Microsoft"), "sottocartella Microsoft");
-  const toggles = () => [...w.document.querySelectorAll(".folder-toggle")];
-  const parentToggle = toggles().find((b) => b.textContent === "Cloud e posta");
-  const childHeader = toggles().find((b) => b.textContent === "Microsoft").closest(".group-h");
-  assert.ok(parseInt(childHeader.style.paddingLeft) > parseInt(parentToggle.closest(".group-h").style.paddingLeft), "sottocartella rientrata");
-  parentToggle.dispatchEvent(new w.MouseEvent("click", { bubbles: true }));
-  await waitFor(() => !toggles().some((b) => b.textContent === "Microsoft"), "cartella compressa");
-  assert.equal(toggles().find((b) => b.textContent === "Cloud e posta").getAttribute("aria-expanded"), "false");
+  // Colonna delle cartelle: le sottocartelle partono chiuse e si aprono con la freccia della cartella madre.
+  const fnames = () => [...w.document.querySelectorAll(".folder-row .folder-name")].map((b) => b.textContent);
+  const frow = (name) => [...w.document.querySelectorAll(".folder-row")].find((r) => r.querySelector(".folder-name").textContent === name);
+  const openFolder = async (name) => {
+    const r = await waitFor(() => frow(name), `cartella ${name}`);
+    r.querySelector(".folder-name").dispatchEvent(new w.MouseEvent("click", { bubbles: true }));
+    await waitFor(() => frow(name)?.classList.contains("on"), `cartella ${name} aperta`);
+  };
+  await waitFor(() => frow("Cloud e posta")?.querySelector("button.folder-chev"), "cartella con sottocartelle");
+  assert.ok(!fnames().includes("Microsoft"), "sottocartella chiusa all'apertura");
+  frow("Cloud e posta").querySelector("button.folder-chev").dispatchEvent(new w.MouseEvent("click", { bubbles: true }));
+  await waitFor(() => fnames().includes("Microsoft"), "sottocartella aperta");
+  assert.ok(parseInt(frow("Microsoft").style.paddingLeft) > parseInt(frow("Cloud e posta").style.paddingLeft), "sottocartella rientrata");
+  await click("Comprimi tutto");
+  await waitFor(() => !fnames().includes("Microsoft"), "cartelle compresse");
+  assert.equal(frow("Cloud e posta").querySelector("button.folder-chev").getAttribute("aria-expanded"), "false");
   await click("Espandi tutto");
-  await waitFor(() => toggles().some((b) => b.textContent === "Microsoft"), "cartelle espanse");
-  step("sottocartelle rientrate, comprimi ed espandi");
+  await waitFor(() => fnames().includes("Microsoft"), "cartelle espanse");
+  step("colonna delle cartelle: sottocartelle rientrate, chiuse all'inizio, comprimi ed espandi");
   await click("Nuovo elemento");
   type("Nome", "Microsoft 365 – amministratore");
   type("Nome utente", "admin@studiomoretti.it");
@@ -291,8 +299,8 @@ try {
   step("revoca con rotazione della chiave dal dialogo");
 
   // Laura non vede più il cliente: le si condivide una sola password.
-  await waitFor(() => w.document.querySelector("[data-item]"), "elementi del cliente");
   await click("Espandi tutto").catch(() => undefined);
+  await openFolder("Microsoft");
   const msRow = await waitFor(() => [...w.document.querySelectorAll("[data-item]")].find((r) => r.textContent.includes("Microsoft 365")), "riga Microsoft 365");
   msRow.dispatchEvent(new w.MouseEvent("click", { bubbles: true }));
   // Invio sicuro a un destinatario esterno.
@@ -372,16 +380,18 @@ try {
   assert.match(hit.getAttribute("href"), /^#\/c\/[0-9a-f-]{36}\/i\/[0-9a-f-]{36}$/);
   // Comprime la cartella che contiene l'elemento: l'arrivo dalla ricerca deve riaprirla.
   await nav(hit.getAttribute("href").split("/i/")[0]);
-  await waitFor(() => w.document.querySelector(".folder-toggle"), "cartelle del cliente");
+  await waitFor(() => frow("Cloud e posta"), "cartelle del cliente");
   await click("Comprimi tutto");
-  await waitFor(() => !w.document.querySelector("[data-item]"), "cartelle compresse");
+  await waitFor(() => !fnames().includes("Microsoft"), "cartelle compresse");
+  await openFolder("Senza cartella");
   await nav("#/cerca");
   await waitFor(() => byLabel("Cerca in tutti i clienti")?.value === "microsoft", "ricerca conservata al ritorno");
   await waitText("Microsoft 365 – amministratore");
   await nav([...w.document.querySelectorAll("a.item-row")].find((a) => a.textContent.includes("Microsoft 365")).getAttribute("href"));
   await waitFor(() => w.document.querySelector('.item-row.on[data-item]')?.textContent.includes("Microsoft 365"), "elemento selezionato nell'elenco");
   await waitFor(() => w.document.querySelector(".detail h2")?.textContent === "Microsoft 365 – amministratore", "dettaglio dell'elemento");
-  step("ricerca globale: il risultato apre la password selezionata, cartelle riaperte");
+  assert.ok(frow("Microsoft")?.classList.contains("on"), "aperta la cartella che contiene l'elemento");
+  step("ricerca globale: il risultato apre la password nella sua cartella, cartelle riaperte");
 
   await nav("#/salute");
   await waitText("Password analizzate");
@@ -438,28 +448,33 @@ try {
   // Selezione multipla nel cliente Studio Legale Moretti (Microsoft 365 nella sottocartella, NAS in "Server").
   const morettiCard = await waitFor(() => [...w.document.querySelectorAll(".client")].find((x) => x.textContent.includes("Studio Legale Moretti")), "scheda del cliente");
   morettiCard.dispatchEvent(new w.MouseEvent("click", { bubbles: true }));
-  await waitFor(() => w.document.querySelector(".folder-toggle"), "cartelle del cliente");
+  await waitFor(() => frow("Server"), "cartelle del cliente");
   await click("Espandi tutto");
-  await waitFor(() => w.document.querySelectorAll("[data-item]").length >= 2, "elementi del cliente");
-  const before = w.document.querySelectorAll("[data-item]").length;
+  const rows = () => [...w.document.querySelectorAll("[data-item]")];
+  // La selezione resta attiva cambiando cartella: un elemento da "Server" e uno dalla sottocartella "Microsoft".
+  await openFolder("Server");
+  await waitFor(() => rows().some((r) => r.textContent.includes("NAS")), "NAS nella cartella Server");
   await click("Seleziona");
   await waitFor(() => w.document.querySelector(".bulk-bar"), "barra di selezione");
-  w.document.querySelector('[aria-label="Seleziona tutta la cartella Server"]').dispatchEvent(new w.MouseEvent("click", { bubbles: true }));
+  w.document.querySelector('[aria-label="Seleziona NAS"]').dispatchEvent(new w.MouseEvent("click", { bubbles: true }));
+  await openFolder("Microsoft");
+  await waitFor(() => w.document.querySelector('[aria-label="Seleziona Microsoft 365 – amministratore"]'), "Microsoft 365 nella sottocartella");
   w.document.querySelector('[aria-label="Seleziona Microsoft 365 – amministratore"]').dispatchEvent(new w.MouseEvent("click", { bubbles: true }));
-  await waitFor(() => w.document.querySelector(".bulk-bar b")?.textContent === "2", "2 elementi selezionati");
+  await waitFor(() => w.document.querySelector(".bulk-bar b")?.textContent === "2", "2 elementi selezionati in due cartelle");
   await click("Sposta nel cestino");
   await waitText("Spostare 2 elementi nel cestino?");
   [...w.document.querySelectorAll(".dialog button")].find((b) => b.textContent === "Sposta nel cestino").dispatchEvent(new w.MouseEvent("click", { bubbles: true }));
-  await waitFor(() => w.document.querySelectorAll("[data-item]").length === before - 2, "elementi spostati nel cestino");
+  await waitFor(() => rows().length === 0, "elementi spostati nel cestino");
   assert.ok(!w.document.querySelector(".bulk-bar"), "la selezione si chiude dopo l'azione");
   [...w.document.querySelectorAll('[role="tab"]')].find((t) => t.textContent === "Cestino").dispatchEvent(new w.MouseEvent("click", { bubbles: true }));
-  await waitFor(() => w.document.querySelectorAll("[data-item]").length === 2, "due elementi nel cestino");
+  await waitFor(() => rows().length === 2, "due elementi nel cestino");
   await click("Seleziona");
   await click("Seleziona tutti (2)");
   await click("Ripristina");
-  await waitFor(() => w.document.querySelectorAll("[data-item]").length === 0, "cestino vuoto");
+  await waitFor(() => rows().length === 0, "cestino vuoto");
   [...w.document.querySelectorAll('[role="tab"]')].find((t) => t.textContent === "Tutto").dispatchEvent(new w.MouseEvent("click", { bubbles: true }));
-  await waitFor(() => w.document.querySelectorAll("[data-item]").length === before, "elementi ripristinati");
+  await openFolder("Microsoft");
+  await waitFor(() => rows().some((r) => r.textContent.includes("Microsoft 365")), "elementi ripristinati");
   // Sposta in cartella: Microsoft 365 fuori da ogni cartella.
   await click("Seleziona");
   w.document.querySelector('[aria-label="Seleziona Microsoft 365 – amministratore"]').dispatchEvent(new w.MouseEvent("click", { bubbles: true }));
@@ -468,7 +483,9 @@ try {
   await waitText("Spostare 1 elemento");
   type("Nella cartella", "");
   await click("Sposta");
-  await waitFor(() => w.document.querySelector('[data-item]')?.textContent.includes("Microsoft 365") && w.document.querySelector('[data-item]').style.paddingLeft === "18px", "elemento fuori dalle cartelle");
+  await waitFor(() => !rows().some((r) => r.textContent.includes("Microsoft 365")), "elemento uscito dalla cartella");
+  await openFolder("Senza cartella");
+  await waitFor(() => rows().some((r) => r.textContent.includes("Microsoft 365")), "elemento fuori dalle cartelle");
   step("selezione multipla: cestino, ripristino e sposta in cartella");
 
   // Più clienti insieme: condivisione con un gruppo e revoca.
