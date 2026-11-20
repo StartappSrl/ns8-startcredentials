@@ -1415,12 +1415,12 @@ __metadata:
   languageName: node
   linkType: hard
 
-"@carbon/icon-helpers@npm:^10.84.0":
-  version: 10.84.0
-  resolution: "@carbon/icon-helpers@npm:10.84.0"
+"@carbon/icon-helpers@npm:^10.85.0":
+  version: 10.85.0
+  resolution: "@carbon/icon-helpers@npm:10.85.0"
   dependencies:
     "@ibm/telemetry-js": "npm:^1.5.0"
-  checksum: 10c0/a2759d761cc7dcb7785179b8fdf384320c5c993a4cb6cb9d688736244dfe50a57234c7c5ff90e743e9086a476d7e195cf05a2e9b01327d8f14b27a0c32bc84d7
+  checksum: 10c0/108480acde5ff6a52441185b4fdebf637fe5a4068653d6d70ce0eb9c760304e431debc0459109da2e3746a3bf0d81552f2d32734ea6f914a9f6e1ec439f469be
   languageName: node
   linkType: hard
 
@@ -1433,13 +1433,13 @@ __metadata:
   languageName: node
   linkType: hard
 
-"@carbon/icons-vue@npm:^10.37.0":
-  version: 10.139.0
-  resolution: "@carbon/icons-vue@npm:10.139.0"
+"@carbon/icons-vue@npm:^10.141.0":
+  version: 10.141.0
+  resolution: "@carbon/icons-vue@npm:10.141.0"
   dependencies:
-    "@carbon/icon-helpers": "npm:^10.84.0"
+    "@carbon/icon-helpers": "npm:^10.85.0"
     "@ibm/telemetry-js": "npm:^1.5.0"
-  checksum: 10c0/5509b24b53f980115279d56c2621c6540d314f77a3ce3980580517551f48f5c0794441362752e109822bf61e69d6ad3d29202ca9b8f572dfbd06a4eb5dca979f
+  checksum: 10c0/713135879ef983fe15473c2b899edd9b4543bfd008a42e898c914f58d7a1b000b9ca147f06f9763b5f3c39c19cf7b7796c123d90d5fafe2d8c4a99f2162f591a
   languageName: node
   linkType: hard
 
@@ -3524,15 +3524,15 @@ __metadata:
   languageName: node
   linkType: hard
 
-"axios@npm:^1.18.1":
-  version: 1.20.0
-  resolution: "axios@npm:1.20.0"
+"axios@npm:^1.21.1":
+  version: 1.21.1
+  resolution: "axios@npm:1.21.1"
   dependencies:
-    follow-redirects: "npm:^1.16.0"
+    follow-redirects: "npm:^1.16.2"
     form-data: "npm:^4.0.6"
     https-proxy-agent: "npm:^5.0.1"
     proxy-from-env: "npm:^2.1.0"
-  checksum: 10c0/976088acf532286356f4c2e65df1ef47ba7da3936d83e928d0d64357bbf5370456abd3eb5826c15df322335fcb1fe200d4a84b4fcf20ffccdd63b40d80fa495c
+  checksum: 10c0/8f0375ff53f1a8edfaadf6259559bb1d8b03daeeb2c4faf550752dac203508803f2430ff8cfe9bfcecbc22d2b8a9ae7a4021f3fc0307c571cbd3177dc5f127eb
   languageName: node
   linkType: hard
 
@@ -4281,14 +4281,14 @@ __metadata:
   languageName: node
   linkType: hard
 
-"core-js@npm:^3.15.2, core-js@npm:^3.6.5":
+"core-js@npm:^3.15.2":
   version: 3.50.0
   resolution: "core-js@npm:3.50.0"
   checksum: 10c0/1bfcfb1dbdf45b0b1428a9fdcb03697d1fc52c7e9bc336f804a86ff2c2705a301dca7d9d6636d09d49d60298183273b9321681baeaf330c78db5393bc73f3f6a
   languageName: node
   linkType: hard
 
-"core-js@npm:^3.8.3":
+"core-js@npm:^3.51.0, core-js@npm:^3.8.3":
   version: 3.51.0
   resolution: "core-js@npm:3.51.0"
   checksum: 10c0/1c10402cb9e8748c17327a68ba7a69e535d125cc81b63261506400681bdd814c6267c55fbc51fafd71d3094dcb25f5f41cc1bc5caba6a15118c73aec9653dd3b
@@ -5545,7 +5545,7 @@ __metadata:
   languageName: node
   linkType: hard
 
-"follow-redirects@npm:^1.0.0, follow-redirects@npm:^1.16.0":
+"follow-redirects@npm:^1.0.0, follow-redirects@npm:^1.16.2":
   version: 1.16.3
   resolution: "follow-redirects@npm:1.16.3"
   peerDependenciesMeta:
@@ -8671,9 +8671,9 @@ __metadata:
   languageName: node
   linkType: hard
 
-"sass@npm:^1.34.1":
-  version: 1.105.1
-  resolution: "sass@npm:1.105.1"
+"sass@npm:^1.108.2":
+  version: 1.108.2
+  resolution: "sass@npm:1.108.2"
   dependencies:
     "@parcel/watcher": "npm:^2.4.1"
     chokidar: "npm:^5.0.0"
@@ -8684,7 +8684,7 @@ __metadata:
       optional: true
   bin:
     sass: sass.js
-  checksum: 10c0/07246d9a9cc3c7974d28e03b394791c65d6a8f701d4ed2f130f5cb72ff3ef5626e5e66afb067348b2ae87011c52e18cd29f294025a6430851ee8617ef8c94f38
+  checksum: 10c0/957bc1d19bf06e2f5d9e6df3a6dc287aedc6b24ce5f343eaaba14a56c0fbe6c4fbfb536040a2e6b02076ccf0fc629c9c9947115157318c343ea416ad938012de
   languageName: node
   linkType: hard
 
@@ -9562,7 +9562,7 @@ __metadata:
   dependencies:
     "@babel/core": "npm:^7.26.0"
     "@babel/eslint-parser": "npm:^7.26.0"
-    "@carbon/icons-vue": "npm:^10.37.0"
+    "@carbon/icons-vue": "npm:^10.141.0"
     "@carbon/vue": "npm:^2.40.0"
     "@nethserver/ns8-ui-lib": "npm:^2.0.0"
     "@vue/cli-plugin-babel": "npm:~5.0.9"
@@ -9572,15 +9572,15 @@ __metadata:
     "@vue/cli-service": "npm:~5.0.9"
     "@vue/eslint-config-prettier": "npm:^7.1.0"
     await-to-js: "npm:^3.0.0"
-    axios: "npm:^1.18.1"
+    axios: "npm:^1.21.1"
     carbon-components: "npm:^10.41.0"
-    core-js: "npm:^3.6.5"
+    core-js: "npm:^3.51.0"
     eslint: "npm:^7.32.0"
     eslint-plugin-prettier: "npm:^4.2.1"
     eslint-plugin-vue: "npm:^8.7.1"
     lottie-web-vue: "npm:^1.2.0"
     prettier: "npm:^2.2.1"
-    sass: "npm:^1.34.1"
+    sass: "npm:^1.108.2"
     sass-loader: "npm:^13.3.3"
     vue: "npm:^2.7.0"
     vue-axios: "npm:^3.2.4"
