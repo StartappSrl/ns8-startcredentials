@@ -150,7 +150,7 @@ npm run test:site -w extension       # riconoscimento dell'estensione sulla pagi
 
 ## Stato
 
-Versione 0.7.9. Fasi 0, 1 e 2 implementate e testate; l'app mobile (fase 3) non
+Versione 0.7.10. Fasi 0, 1 e 2 implementate e testate; l'app mobile (fase 3) non
 è ancora iniziata. Prima dell'uso in produzione servono un
 penetration test esterno e una revisione indipendente della crittografia.
 L'app mobile (fase 3) userà `packages/crypto` e `packages/client`.

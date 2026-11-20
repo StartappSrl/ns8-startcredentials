@@ -428,6 +428,8 @@ export function ContainerView({ vault, id, focusItem, onChanged }: { vault: Vaul
   const [q, setQ] = useState("");
   const [selected, setSelected] = useState<string | null>(null);
   const [editing, setEditing] = useState<Item | "new" | null>(null);
+  // Elemento da duplicare: si apre l'editor già compilato con i suoi dati.
+  const [duplicating, setDuplicating] = useState<Item | null>(null);
   const [sharing, setSharing] = useState(false);
   const [editMeta, setEditMeta] = useState(false);
   const [newFolder, setNewFolder] = useState(false);
@@ -763,7 +765,7 @@ export function ContainerView({ vault, id, focusItem, onChanged }: { vault: Vaul
           <button class="btn ghost sm only-narrow" style="margin-bottom:8px" onClick={() => setPane("items")}>‹ {listTitle}</button>
           {sel ? (
             <ItemDetail key={sel.id} vault={vault} item={sel} canWrite={canWrite} canShare={canManage && c.kind === "client"} folders={c.folders}
-              onEdit={() => setEditing(sel)} onChanged={reloadAll}
+              onEdit={() => setEditing(sel)} onDuplicate={() => setDuplicating(sel)} onChanged={reloadAll}
               onDeleted={() => { setSelected(null); setPane("items"); reloadAll(); toast(tab === "trash" ? "Elemento ripristinato" : "Elemento spostato nel cestino"); }} />
           ) : (
             <div class="card empty"><p>Seleziona un elemento per vederne i dettagli.</p></div>
@@ -773,6 +775,8 @@ export function ContainerView({ vault, id, focusItem, onChanged }: { vault: Vaul
 
       {editing && <ItemEditor vault={vault} containerId={id} folders={c.folders} item={editing === "new" ? undefined : editing} defaultFolder={filtering ? null : cur}
         onClose={() => setEditing(null)} onSaved={(iid) => { setEditing(null); setSelected(iid); reloadAll(); toast("Salvato"); }} />}
+      {duplicating && <ItemEditor vault={vault} containerId={id} folders={c.folders} template={duplicating}
+        onClose={() => setDuplicating(null)} onSaved={(iid) => { setDuplicating(null); setSelected(iid); setPane("detail"); reloadAll(); toast("Copia creata"); }} />}
       {moveOpen && (
         <Dialog title={`Spostare ${checked.size} ${checked.size === 1 ? "elemento" : "elementi"}`} onClose={() => setMoveOpen(false)}>
           <label class="field">Nella cartella
@@ -875,8 +879,8 @@ export function folderPath(folders: Folder[], id: string | null): string {
 
 // ------------------------------------------------------------------ dettaglio elemento
 
-export function ItemDetail({ vault, item, canWrite, canShare, folders, onEdit, onChanged, onDeleted }: {
-  vault: Vault; item: Item; canWrite: boolean; canShare?: boolean; folders: Folder[]; onEdit: () => void; onChanged: () => void; onDeleted: () => void;
+export function ItemDetail({ vault, item, canWrite, canShare, folders, onEdit, onDuplicate, onChanged, onDeleted }: {
+  vault: Vault; item: Item; canWrite: boolean; canShare?: boolean; folders: Folder[]; onEdit: () => void; onDuplicate?: () => void; onChanged: () => void; onDeleted: () => void;
 }) {
   const [sending, setSending] = useState(false);
   const sendPolicy = useLoad(() => serverStatus(vault.api), []);
@@ -970,6 +974,7 @@ export function ItemDetail({ vault, item, canWrite, canShare, folders, onEdit, o
       <ErrorNote error={error} />
       <div class="row">
         {canWrite && !item.deletedAt && <button class="btn sm" onClick={onEdit}>Modifica</button>}
+        {canWrite && !item.deletedAt && !item.sharedBy && onDuplicate && <button class="btn sm" onClick={onDuplicate}>Duplica</button>}
         {!item.sharedBy && <button class="btn sm" onClick={() => setHistory(true)}>Cronologia</button>}
         {canShare && !item.deletedAt && <button class="btn sm" onClick={() => setSharing(true)}>Condividi solo questa password{item.shares ? ` (${item.shares})` : ""}</button>}
         {canWrite && !item.deletedAt && !item.sharedBy && sendPolicy.data?.policy?.secureSend?.enabled !== false && (
@@ -1009,12 +1014,15 @@ function HistoryDialog({ vault, item, onClose }: { vault: Vault; item: Item; onC
 
 // ------------------------------------------------------------------ editor elemento
 
-function ItemEditor({ vault, containerId, folders, item, defaultFolder, onClose, onSaved }: {
-  vault: Vault; containerId: string; folders: Folder[]; item?: Item; defaultFolder?: string | null; onClose: () => void; onSaved: (id: string) => void;
+function ItemEditor({ vault, containerId, folders, item, template, defaultFolder, onClose, onSaved }: {
+  vault: Vault; containerId: string; folders: Folder[]; item?: Item;
+  /** Duplicazione: nuovo elemento precompilato con i dati di questo (allegati esclusi). */
+  template?: Item;
+  defaultFolder?: string | null; onClose: () => void; onSaved: (id: string) => void;
 }) {
-  const d = item?.data;
+  const d = item?.data ?? template?.data;
   const [type, setType] = useState<ItemData["type"]>(d?.type ?? "login");
-  const [name, setName] = useState(d?.name ?? "");
+  const [name, setName] = useState(template ? `${template.data.name} (copia)` : d?.name ?? "");
   const [username, setUsername] = useState(d?.username ?? "");
   const [password, setPassword] = useState(d?.password ?? "");
   const [urls, setUrls] = useState((d?.urls ?? []).join("\n"));
@@ -1022,8 +1030,9 @@ function ItemEditor({ vault, containerId, folders, item, defaultFolder, onClose,
   const legacyTotp = !!d && !d.totpUri && !!effectiveTotpUri(d);
   const [totp, setTotp] = useState(d ? effectiveTotpUri(d) ?? "" : "");
   const [notes, setNotes] = useState(d?.notes ?? "");
-  const [folderId, setFolderId] = useState(item ? item.folderId ?? "" : defaultFolder ?? "");
-  const [fields, setFields] = useState((d?.fields ?? []).filter((f) => !legacyTotp || !KEEPASS_TOTP_FIELDS.includes(f.label)));
+  const source = item ?? template;
+  const [folderId, setFolderId] = useState(source ? source.folderId ?? "" : defaultFolder ?? "");
+  const [fields, setFields] = useState((d?.fields ?? []).map((f) => ({ ...f })).filter((f) => !legacyTotp || !KEEPASS_TOTP_FIELDS.includes(f.label)));
   const { busy, error, setError, run } = useAction();
 
   const save = (e: Event) => {
@@ -1050,8 +1059,14 @@ function ItemEditor({ vault, containerId, folders, item, defaultFolder, onClose,
   };
 
   return (
-    <Dialog title={item ? "Modifica elemento" : "Nuovo elemento"} onClose={onClose} wide>
+    <Dialog title={item ? "Modifica elemento" : template ? "Duplica elemento" : "Nuovo elemento"} onClose={onClose} wide>
       <form class="stack" onSubmit={save}>
+        {template && (
+          <div class="notice info">
+            Stai creando una copia di <b>{template.data.name}</b>: modifica quello che serve e salva. L'originale non cambia.
+            {template.attachments.length > 0 && ` Gli allegati (${template.attachments.length}) non vengono copiati.`}
+          </div>
+        )}
         <div class="row" style="align-items:flex-end">
           <label class="field" style="flex:1 1 160px">Tipo
             <select class="input" value={type} onChange={(e) => setType(e.currentTarget.value as ItemData["type"])}>

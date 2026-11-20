@@ -488,6 +488,19 @@ try {
   await waitFor(() => rows().some((r) => r.textContent.includes("Microsoft 365")), "elemento fuori dalle cartelle");
   step("selezione multipla: cestino, ripristino e sposta in cartella");
 
+  // Duplicazione: copia modificabile prima del salvataggio, l'originale resta invariato.
+  rows().find((r) => r.textContent.includes("Microsoft 365")).dispatchEvent(new w.MouseEvent("click", { bubbles: true }));
+  await waitFor(() => w.document.querySelector(".detail h2")?.textContent === "Microsoft 365 – amministratore", "dettaglio dell'originale");
+  await click("Duplica");
+  await waitText("Duplica elemento");
+  assert.equal(byLabel("Nome").value, "Microsoft 365 – amministratore (copia)");
+  assert.equal(byLabel("Nome utente").value, "admin@studiomoretti.it");
+  type("Nome", "Microsoft 365 – secondo tenant");
+  await click("Salva");
+  await waitFor(() => w.document.querySelector(".detail h2")?.textContent === "Microsoft 365 – secondo tenant", "copia salvata e selezionata");
+  await waitFor(() => rows().some((r) => r.textContent.includes("Microsoft 365 – amministratore")) && rows().some((r) => r.textContent.includes("secondo tenant")), "originale e copia nell'elenco");
+  step("duplicazione di una password, modificabile prima del salvataggio");
+
   // Più clienti insieme: condivisione con un gruppo e revoca.
   await nav("#/clienti");
   await waitFor(() => [...w.document.querySelectorAll(".client")].length >= 2, "elenco dei clienti");
