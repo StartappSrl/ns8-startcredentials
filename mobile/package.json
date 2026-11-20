@@ -33,5 +33,10 @@
     "typecheck": "tsc --noEmit",
     "test:engine": "node engine/engine.test.mjs"
   },
-  "private": true
+  "private": true,
+  "overrides": {
+    "@expo/fingerprint": {
+      "minimatch": "^11.0.9"
+    }
+  }
 }

@@ -3,6 +3,10 @@ module.exports = {
   // added to fix the build of https://github.com/NethServer/ns8-startcredentials/pull/114
   transpileDependencies: ["axios"],
   configureWebpack: {
+    resolve: {
+      // webpack 5 non include più i moduli di Node: crypto serve solo per randomBytes
+      fallback: { crypto: require.resolve("./src/shims/crypto.js") },
+    },
     optimization: {
       splitChunks: {
         // Cap chunk size so the single vendor bundle is split into a few
@@ -12,15 +16,9 @@ module.exports = {
     },
   },
   chainWebpack: (config) => {
-    config.module
-      .rule("images")
-      .use("url-loader")
-      .loader("url-loader")
-      .tap((options) => {
-        // Do not base64 encode images URLs. Needed to always generate module logo image
-        options.limit = -1;
-        return options;
-      });
+    // Do not base64 encode images URLs. Needed to always generate module logo image
+    // (webpack 5: asset/resource emits the file and returns its URL)
+    config.module.rule("images").type("asset/resource");
   },
   css: {
     loaderOptions: {

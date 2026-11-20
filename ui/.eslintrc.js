@@ -10,5 +10,7 @@ module.exports = {
   rules: {
     "no-console": "off",
     "no-debugger": process.env.NODE_ENV === "production" ? "warn" : "off",
+    // Nomi delle viste del modulo NS8 (About, Settings, Status) fissati dal template
+    "vue/multi-word-component-names": "off",
   },
 };
