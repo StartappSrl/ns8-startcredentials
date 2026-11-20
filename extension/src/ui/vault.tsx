@@ -3,7 +3,7 @@ import { useEffect, useMemo, useRef, useState } from "preact/hooks";
 import {
   Container, DirectoryUser, effectiveTotpUri, Folder, generatePassword, Item, ItemData, KEEPASS_TOTP_FIELDS, Permission, serverStatus, Vault,
 } from "@startcredentials/client";
-import { download, initials, loadCollapsed, loadVersions, lock, relTime, saveCollapsed, signOut, tint } from "../shared";
+import { ClientsView, download, errorText, initials, loadClientsView, loadExpanded, loadVersions, lock, relTime, saveClientsView, saveExpanded, signOut, tint } from "../shared";
 import { Brand, CopyButton, Dialog, ErrorNote, Meter, OtpCode, Secret, useAction, useLoad, useToast } from "./kit";
 
 /** Indirizzo apribile: senza protocollo si usa HTTPS; solo http/https sono ammessi. */
@@ -106,6 +106,10 @@ export function Clients({ vault, containers, reload, shared }: { vault: Vault; c
   const [selecting, setSelecting] = useState(false);
   const [picked, setPicked] = useState<Set<string>>(new Set());
   const [bulk, setBulk] = useState(false);
+  const [bulkDelete, setBulkDelete] = useState(false);
+  const [view, setView] = useState<ClientsView>("list");
+  useEffect(() => { void loadClientsView().then(setView); }, []);
+  const changeView = (v: ClientsView) => { setView(v); void saveClientsView(v); };
   let list = containers.filter((c) => c.kind === "client" && (!shared || c.grantedBy !== vault.me.id));
   if (q) list = list.filter((c) => `${c.meta.name} ${c.meta.sector ?? ""}`.toLowerCase().includes(q.toLowerCase()));
   if (filter === "manage") list = list.filter((c) => c.permission === "manage");
@@ -132,6 +136,7 @@ export function Clients({ vault, containers, reload, shared }: { vault: Vault; c
           </button>
           <button class="btn sm ghost" disabled={!picked.size} onClick={() => setPicked(new Set())}>Deseleziona</button>
           <button class="btn sm primary" disabled={!picked.size} onClick={() => setBulk(true)}>Condividi o togli accesso</button>
+          <button class="btn sm danger" disabled={!picked.size} onClick={() => setBulkDelete(true)}>Elimina</button>
           <button class="btn sm" onClick={() => { setSelecting(false); setPicked(new Set()); }}>Fine</button>
         </div>
       )}
@@ -140,10 +145,17 @@ export function Clients({ vault, containers, reload, shared }: { vault: Vault; c
           <h1>{shared ? "Condivisi con me" : "Clienti"}</h1>
           <p class="muted">{shared ? "Clienti che altri colleghi hanno condiviso con te." : "Ogni cliente è un contenitore con la propria chiave. Vedi solo quelli a cui hai accesso."}</p>
         </div>
-        <div class="chips" role="group" aria-label="Filtri">
-          {([["all", "Tutti"], ["manage", "Gestiti da me"], ["otp", "Con OTP"], ["recent", "Recenti"]] as const).map(([k, l]) => (
-            <button class={`chip${filter === k ? " on" : ""}`} aria-pressed={filter === k} onClick={() => setFilter(k)}>{l}</button>
-          ))}
+        <div class="row" style="gap:10px">
+          <div class="chips" role="group" aria-label="Filtri">
+            {([["all", "Tutti"], ["manage", "Gestiti da me"], ["otp", "Con OTP"], ["recent", "Recenti"]] as const).map(([k, l]) => (
+              <button class={`chip${filter === k ? " on" : ""}`} aria-pressed={filter === k} onClick={() => setFilter(k)}>{l}</button>
+            ))}
+          </div>
+          <div class="chips" role="group" aria-label="Visualizzazione">
+            {([["list", "Elenco"], ["grid", "Caselle"]] as const).map(([k, l]) => (
+              <button class={`chip${view === k ? " on" : ""}`} aria-pressed={view === k} onClick={() => changeView(k)}>{l}</button>
+            ))}
+          </div>
         </div>
       </div>
       {list.length === 0 ? (
@@ -152,6 +164,43 @@ export function Clients({ vault, containers, reload, shared }: { vault: Vault; c
           {!shared && !q && vault.me.role === "admin" && <button class="btn primary" onClick={() => setCreating(true)}>Crea il primo cliente</button>}
           {!shared && !q && vault.me.role !== "admin" && <p class="small">I clienti li crea un amministratore: quando ne condividerà uno con te, lo troverai qui.</p>}
         </div>
+      ) : view === "list" ? (
+        <div class="card client-list" role="list">
+          <div class={`client-row head${selecting ? " selecting" : ""}`} aria-hidden="true">
+            {selecting && <span />}
+            <span />
+            <span>Cliente</span>
+            <span class="num">Elementi</span>
+            <span class="num wide">OTP</span>
+            <span class="num wide">Persone</span>
+            <span class="wide">Permesso</span>
+            <span class="wide">Aggiornato</span>
+          </div>
+          {list.map((c) => {
+            const t = tint(c.id);
+            return (
+              <button role="listitem" class={`client client-row${selecting ? " selecting" : ""}${selecting && picked.has(c.id) ? " picked" : ""}`} aria-pressed={selecting ? picked.has(c.id) : undefined}
+                disabled={selecting && c.permission !== "manage"}
+                title={selecting && c.permission !== "manage" ? "Solo i gestori del cliente possono selezionarlo" : undefined}
+                onClick={() => {
+                  if (!selecting) return go(`/c/${c.id}`);
+                  setPicked((prev) => { const n = new Set(prev); if (n.has(c.id)) n.delete(c.id); else n.add(c.id); return n; });
+                }}>
+                {selecting && <input type="checkbox" class="row-check" tabIndex={-1} checked={picked.has(c.id)} disabled={c.permission !== "manage"} aria-hidden="true" />}
+                <span class="mono-tile sm" style={`background:${t.bg};color:${t.fg}`}>{initials(c.meta.name)}</span>
+                <span class="name">
+                  <span class="ellipsis" style="display:block;font-weight:600">{c.meta.name}</span>
+                  <span class="ellipsis small muted" style="display:block">{c.meta.sector || "—"}</span>
+                </span>
+                <span class="num">{c.items}</span>
+                <span class="num wide">{c.totpItems}</span>
+                <span class="num wide">{c.members}</span>
+                <span class="wide"><span class="badge">{PERM_LABEL[c.permission]}</span></span>
+                <span class="small muted wide">{relTime(c.updatedAt)}</span>
+              </button>
+            );
+          })}
+        </div>
       ) : (
         <div class="grid">
           {list.map((c) => {
@@ -159,7 +208,7 @@ export function Clients({ vault, containers, reload, shared }: { vault: Vault; c
             return (
               <button class={`client${selecting && picked.has(c.id) ? " picked" : ""}`} aria-pressed={selecting ? picked.has(c.id) : undefined}
                 disabled={selecting && c.permission !== "manage"}
-                title={selecting && c.permission !== "manage" ? "Solo i gestori del cliente possono condividerlo" : undefined}
+                title={selecting && c.permission !== "manage" ? "Solo i gestori del cliente possono selezionarlo" : undefined}
                 onClick={() => {
                   if (!selecting) return go(`/c/${c.id}`);
                   setPicked((prev) => { const n = new Set(prev); if (n.has(c.id)) n.delete(c.id); else n.add(c.id); return n; });
@@ -189,7 +238,61 @@ export function Clients({ vault, containers, reload, shared }: { vault: Vault; c
         <BulkShareDialog vault={vault} containers={containers.filter((c) => picked.has(c.id))}
           onClose={(changed) => { setBulk(false); if (changed) { setSelecting(false); setPicked(new Set()); reload(); } }} />
       )}
+      {bulkDelete && (
+        <BulkDeleteDialog vault={vault} containers={containers.filter((c) => picked.has(c.id))}
+          onClose={(changed) => { setBulkDelete(false); if (changed) { setSelecting(false); setPicked(new Set()); reload(); } }} />
+      )}
     </>
+  );
+}
+
+/** Eliminazione di più clienti insieme, con conferma scritta. */
+function BulkDeleteDialog({ vault, containers, onClose }: { vault: Vault; containers: Container[]; onClose: (changed: boolean) => void }) {
+  const [typed, setTyped] = useState("");
+  const [progress, setProgress] = useState<string | null>(null);
+  const [result, setResult] = useState<{ done: number; failed: { name: string; error: string }[] } | null>(null);
+  const { busy, error, run } = useAction();
+  const word = "ELIMINA";
+  const n = containers.length;
+
+  if (result) {
+    return (
+      <Dialog title="Eliminazione completata" onClose={() => onClose(true)}>
+        <div class="notice ok">{result.done} {result.done === 1 ? "cliente eliminato" : "clienti eliminati"} su {n}.</div>
+        {result.failed.length > 0 && (
+          <div class="notice warn">Non riusciti: {result.failed.map((f) => `${f.name} (${f.error})`).join("; ")}.</div>
+        )}
+        <div class="row" style="justify-content:flex-end"><button class="btn primary" onClick={() => onClose(true)}>Fatto</button></div>
+      </Dialog>
+    );
+  }
+  return (
+    <Dialog title={`Eliminare ${n} ${n === 1 ? "cliente" : "clienti"}?`} onClose={() => !busy && onClose(false)}>
+      <div class="small muted" style="max-height:120px;overflow:auto">{containers.map((c) => c.meta.name).join(", ")}</div>
+      <p>Tutti gli elementi dei clienti selezionati diventeranno inaccessibili per ogni membro. Per confermare scrivi <b>{word}</b>.</p>
+      <input class="input" aria-label="Conferma eliminazione" value={typed} onInput={(e) => setTyped(e.currentTarget.value)} />
+      <ErrorNote error={error} />
+      <div class="row" style="justify-content:flex-end">
+        <button class="btn" disabled={busy} onClick={() => onClose(false)}>Annulla</button>
+        <button class="btn primary" style="background:var(--danger);border-color:var(--danger)" disabled={busy || typed.trim().toUpperCase() !== word}
+          onClick={() => run(async () => {
+            let done = 0;
+            const failed: { name: string; error: string }[] = [];
+            for (const [i, c] of containers.entries()) {
+              setProgress(`${i + 1} di ${n}`);
+              try {
+                await vault.deleteContainer(c.id);
+                done++;
+              } catch (e) {
+                failed.push({ name: c.meta.name, error: errorText(e) });
+              }
+            }
+            setResult({ done, failed });
+          })}>
+          {busy ? `Eliminazione ${progress ?? "…"}` : `Elimina ${n} ${n === 1 ? "cliente" : "clienti"}`}
+        </button>
+      </div>
+    </Dialog>
   );
 }
 
@@ -328,7 +431,7 @@ export function ContainerView({ vault, id, focusItem, onChanged }: { vault: Vaul
   const [sharing, setSharing] = useState(false);
   const [editMeta, setEditMeta] = useState(false);
   const [newFolder, setNewFolder] = useState(false);
-  const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
+  const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const [selecting, setSelecting] = useState(false);
   const [checked, setChecked] = useState<Set<string>>(new Set());
   const [confirmBulk, setConfirmBulk] = useState(false);
@@ -336,7 +439,7 @@ export function ContainerView({ vault, id, focusItem, onChanged }: { vault: Vaul
   const [moveTarget, setMoveTarget] = useState("");
   const bulk = useAction();
   useEffect(() => { setChecked(new Set()); }, [tab, id]);
-  useEffect(() => { void loadCollapsed(id).then((ids) => setCollapsed(new Set(ids))); }, [id]);
+  useEffect(() => { setExpanded(new Set()); void loadExpanded(id).then((ids) => setExpanded(new Set(ids))); }, [id]);
   const info = useLoad(() => vault.container(id), [id]);
   const items = useLoad(() => vault.items(id, { trash: tab === "trash" }), [id, tab === "trash"]);
   const toast = useToast();
@@ -367,7 +470,7 @@ export function ContainerView({ vault, id, focusItem, onChanged }: { vault: Vaul
       ancestors.add(f.id);
       f = info.data.folders.find((x) => x.id === f!.parentId);
     }
-    setCollapsed((prev) => new Set([...prev].filter((x) => !ancestors.has(x))));
+    setExpanded((prev) => new Set([...prev, ...ancestors]));
     setTimeout(() => document.querySelector(`[data-item="${it.id}"]`)?.scrollIntoView?.({ block: "center" }), 50);
   }, [focusItem, items.data, info.data]);
   const c = info.data;
@@ -442,17 +545,17 @@ export function ContainerView({ vault, id, focusItem, onChanged }: { vault: Vaul
 
   // Con ricerca o filtri attivi si aprono solo le cartelle che contengono risultati.
   const filtering = !!q || tab !== "all";
-  const toggle = (fid: string) => setCollapsed((prev) => {
+  const toggle = (fid: string) => setExpanded((prev) => {
     const next = new Set(prev);
     if (next.has(fid)) next.delete(fid);
     else next.add(fid);
-    void saveCollapsed(id, [...next]);
+    void saveExpanded(id, [...next]);
     return next;
   });
   const setAll = (close: boolean) => {
-    const next = new Set(close ? c.folders.map((f) => f.id) : []);
-    setCollapsed(next);
-    void saveCollapsed(id, [...next]);
+    const next = new Set(close ? [] : c.folders.map((f) => f.id));
+    setExpanded(next);
+    void saveExpanded(id, [...next]);
   };
 
   const itemContent = (i: Item) => (
@@ -479,7 +582,7 @@ export function ContainerView({ vault, id, focusItem, onChanged }: { vault: Vaul
   const renderFolder = (f: Folder, depth: number): ComponentChildren => {
     const n = countDeep(f.id);
     if (filtering && n === 0) return null;
-    const open = filtering || !collapsed.has(f.id);
+    const open = filtering || expanded.has(f.id);
     const kids = children.get(f.id) ?? [];
     return (
       <>

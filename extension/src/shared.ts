@@ -220,15 +220,30 @@ export function download(bytes: Uint8Array, name: string, mime: string): void {
   setTimeout(() => URL.revokeObjectURL(url), 10_000);
 }
 
-/** Cartelle chiuse per cliente (solo identificativi, nessun dato riservato). */
-export async function loadCollapsed(containerId: string): Promise<string[]> {
-  const r = await chrome.storage.local.get("collapsed");
-  return r.collapsed?.[containerId] ?? [];
+/**
+ * Cartelle aperte per cliente (solo identificativi, nessun dato riservato).
+ * Di base le cartelle sono chiuse: aprendo un cliente si vedono subito gli elementi senza cartella.
+ */
+export async function loadExpanded(containerId: string): Promise<string[]> {
+  const r = await chrome.storage.local.get("expanded");
+  return r.expanded?.[containerId] ?? [];
 }
 
-export async function saveCollapsed(containerId: string, ids: string[]): Promise<void> {
-  const r = await chrome.storage.local.get("collapsed");
-  await chrome.storage.local.set({ collapsed: { ...(r.collapsed ?? {}), [containerId]: ids } });
+export async function saveExpanded(containerId: string, ids: string[]): Promise<void> {
+  const r = await chrome.storage.local.get("expanded");
+  await chrome.storage.local.set({ expanded: { ...(r.expanded ?? {}), [containerId]: ids } });
+}
+
+export type ClientsView = "list" | "grid";
+
+/** Vista dell'elenco clienti scelta dall'utente (elenco compatto o caselle). */
+export async function loadClientsView(): Promise<ClientsView> {
+  const r = await chrome.storage.local.get("clientsView");
+  return r.clientsView === "grid" ? "grid" : "list";
+}
+
+export async function saveClientsView(v: ClientsView): Promise<void> {
+  await chrome.storage.local.set({ clientsView: v });
 }
 
 export interface PendingSave { tabId: number; host: string; username: string; password: string; at: number }
