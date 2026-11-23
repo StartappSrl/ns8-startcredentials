@@ -307,10 +307,20 @@ try {
   await waitFor(() => [...w.document.querySelectorAll("button")].some((b) => b.textContent === "Invia in modo sicuro"), "pulsante di invio sicuro");
   await click("Invia in modo sicuro");
   type("Email del destinatario", "referente@cliente.it");
+  type("Cellulare per il codice su WhatsApp", "12");
+  await waitText("Numero non valido");
+  type("Cellulare per il codice su WhatsApp", "333 123 4567");
   await click("Crea l'invio");
   await waitText("Invio sicuro creato", 60000);
   const sendCode = [...w.document.querySelectorAll(".dialog .share-box")].map((x) => x.textContent).find((t) => /^[A-Z2-9]{4}(-[A-Z2-9]{4}){3}$/.test(t));
   assert.ok(sendCode, "codice di accesso mostrato al mittente");
+  // Codice di sblocco su WhatsApp: numero normalizzato, solo il codice nel messaggio (il collegamento resta nell'email).
+  const waLink = [...w.document.querySelectorAll(".dialog a")].find((a) => a.textContent.includes("WhatsApp"));
+  assert.ok(waLink, "pulsante per inviare il codice su WhatsApp");
+  assert.ok(waLink.getAttribute("href").startsWith("https://wa.me/393331234567?text="), waLink.getAttribute("href"));
+  const waText = decodeURIComponent(waLink.getAttribute("href").split("text=")[1]);
+  assert.ok(waText.includes(sendCode), "il messaggio contiene il codice");
+  assert.ok(!/https?:\/\//.test(waText), "il messaggio non contiene il collegamento");
   // In questo test il server non ha un servizio email: l'estensione deve dirlo e offrire il collegamento.
   assert.ok(text().includes("Collegamento inviato per email a referente@cliente.it") || text().includes("Email non inviata: manda tu il collegamento"));
   await click("Fatto");

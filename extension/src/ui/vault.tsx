@@ -1197,6 +1197,26 @@ function ShareDialog({ vault, container, onClose }: { vault: Vault; container: C
   );
 }
 
+/**
+ * Numero per wa.me: solo cifre con prefisso internazionale.
+ * "+39 333…", "0039 333…" e i cellulari italiani senza prefisso ("333…") diventano "39333…".
+ * Restituisce "" se vuoto, null se non valido.
+ */
+export function whatsappNumber(raw: string): string | null {
+  let s = raw.replace(/[\s().-]/g, "");
+  if (!s) return "";
+  if (s.startsWith("+")) s = s.slice(1);
+  else if (s.startsWith("00")) s = s.slice(2);
+  else if (/^3\d{8,9}$/.test(s)) s = `39${s}`;
+  return /^[1-9]\d{7,14}$/.test(s) ? s : null;
+}
+
+/** Collegamento WhatsApp con il solo codice: il collegamento all'invio resta nell'email (due canali separati). */
+export function whatsappCodeLink(code: string, phone: string): string {
+  const text = `Ciao, ti ho appena inviato per email un collegamento sicuro (StartCredentials). Per aprirlo usa questo codice: ${code}`;
+  return `https://wa.me/${phone}?text=${encodeURIComponent(text)}`;
+}
+
 /** Invio sicuro a un destinatario anche esterno: cifrato qui, codice da comunicare a parte. */
 function SecureSendDialog({ vault, item, policy, onClose }: {
   vault: Vault; item: Item; policy?: { enabled: boolean; maxHours: number; domains: string[] }; onClose: () => void;
@@ -1205,6 +1225,9 @@ function SecureSendDialog({ vault, item, policy, onClose }: {
   const durations = ([[1, "1 ora"], [24, "1 giorno"], [72, "3 giorni"], [168, "7 giorni"], [336, "14 giorni"], [720, "30 giorni"]] as const)
     .filter(([h]) => h <= maxHours);
   const [to, setTo] = useState("");
+  // Cellulare per mandare il codice su WhatsApp: resta in questa finestra, non va al server.
+  const [phone, setPhone] = useState("");
+  const wa = whatsappNumber(phone);
   const [hours, setHours] = useState<number>(durations.find(([h]) => h === 24)?.[0] ?? durations[0]![0]);
   const [views, setViews] = useState(1);
   const d = item.data;
@@ -1227,6 +1250,14 @@ function SecureSendDialog({ vault, item, policy, onClose }: {
           <label class="field">Codice di accesso: comunicalo per un canale diverso dall'email (SMS, WhatsApp, telefono). Non viene salvato: annotalo ora se serve.
             <div class="input-group"><div class="share-box mono" style="font-size:18px;letter-spacing:2px;flex:1">{res.code}</div><CopyButton value={res.code} /></div>
           </label>
+          <div class="row" style="align-items:center">
+            <a class="btn" href={whatsappCodeLink(res.code, wa || "")} target="_blank" rel="noopener noreferrer">
+              {wa ? `Invia il codice su WhatsApp a +${wa}` : "Invia il codice su WhatsApp"}
+            </a>
+            <span class="small muted grow">
+              {wa ? "Si apre WhatsApp con il messaggio già scritto: controlla e premi invia." : "Si apre WhatsApp con il messaggio già scritto: scegli tu il contatto."} Nel messaggio c'è solo il codice, non il collegamento.
+            </span>
+          </div>
           <label class="field">Collegamento (già nell'email; serve solo per un invio manuale)
             <div class="input-group"><input class="input mono" readOnly value={res.link} /><CopyButton value={res.link} /></div>
           </label>
@@ -1247,6 +1278,12 @@ function SecureSendDialog({ vault, item, policy, onClose }: {
           <input class="input" type="email" required value={to} onInput={(e) => setTo(e.currentTarget.value)} placeholder="referente@cliente.it" />
         </label>
         {policy?.domains?.length ? <p class="small muted">Domini ammessi: {policy.domains.join(", ")}</p> : null}
+        <label class="field">Cellulare per il codice su WhatsApp (facoltativo)
+          <input class="input" type="tel" inputMode="tel" autoComplete="off" value={phone} onInput={(e) => setPhone(e.currentTarget.value)} placeholder="+39 333 1234567" />
+          {wa === null
+            ? <span class="small" style="color:var(--danger)">Numero non valido: usa il prefisso internazionale, per esempio +39 333 1234567.</span>
+            : <span class="small muted">Serve solo ad aprire WhatsApp sul contatto giusto: non viene salvato.</span>}
+        </label>
         <fieldset class="stack" style="border:0;padding:0;margin:0;gap:6px">
           <legend class="small muted" style="margin-bottom:4px">Cosa inviare</legend>
           {opts.filter(([, , has]) => has).map(([k, label]) => (
@@ -1269,7 +1306,7 @@ function SecureSendDialog({ vault, item, policy, onClose }: {
         <ErrorNote error={error} />
         <div class="row" style="justify-content:flex-end">
           <button type="button" class="btn" onClick={onClose}>Annulla</button>
-          <button class="btn primary" disabled={busy || !Object.values(fields).some(Boolean)}>{busy ? "Cifratura…" : "Crea l'invio"}</button>
+          <button class="btn primary" disabled={busy || wa === null || !Object.values(fields).some(Boolean)}>{busy ? "Cifratura…" : "Crea l'invio"}</button>
         </div>
       </form>
     </Dialog>
