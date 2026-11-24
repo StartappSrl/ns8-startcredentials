@@ -1,6 +1,6 @@
 {
   "name": "startcredentials-mobile",
-  "version": "0.8.4",
+  "version": "0.8.5",
   "main": "index.ts",
   "dependencies": {
     "expo": "~57.0.33",

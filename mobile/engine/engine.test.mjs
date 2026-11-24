@@ -156,10 +156,12 @@ try {
   const fid = await call("createFolder", c.id, "Rete", null);
   const pw = await call("generatePassword", 24, true);
   assert.equal(pw.length, 24);
-  const nid = await call("createItem", c.id, { type: "login", name: "Switch", username: "admin", password: pw, urls: ["https://switch.mobile.it"],
+  const nid = await call("createItem", c.id, { type: "login", name: "Switch", username: "admin", password: pw, urls: ["https://switch.mobile.it"], rotateDays: 90,
     fields: [{ label: "TimeOtp-Secret-Base32", value: "VECCHIOSEGRETOIMPORTATO", secret: true }] }, fid);
   let mine = (await call("items", c.id)).find((i) => i.id === nid);
   assert.equal(mine.folderId, fid);
+  const firstChange = mine.data.passwordChangedAt;
+  assert.ok(firstChange, "data del cambio password impostata anche dal telefono");
   // Aggancio dell'OTP a una password esistente: chiave Base32 (con spazi, come la mostrano i servizi).
   const parsed = await call("parseTotp", "gezd gnbv gy3t qojq gezd gnbv gy3t qojq", "Switch");
   assert.match(parsed.uri, /^otpauth:\/\/totp\/Switch\?secret=GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ$/);
@@ -167,6 +169,7 @@ try {
   await call("updateItem", nid, { ...mine.data, totpUri: parsed.uri });
   mine = (await call("items", c.id)).find((i) => i.id === nid);
   assert.equal(mine.data.totpUri, parsed.uri);
+  assert.equal(mine.data.passwordChangedAt, firstChange, "senza cambiare password la data resta");
   assert.ok(!(mine.data.fields ?? []).some((f) => f.label.startsWith("TimeOtp")), "i vecchi campi OTP importati vengono tolti");
   assert.equal((await call("totp", await call("effectiveTotp", nid))).code, parsed.code);
   // Link otpauth (da QR code) con parametri.
@@ -177,9 +180,11 @@ try {
   mine = (await call("items", c.id)).find((i) => i.id === nid);
   assert.equal(mine.data.password, "nuova!");
   assert.equal(mine.folderId, null);
+  assert.ok(mine.data.passwordChangedAt > firstChange, "cambiando password dal telefono la data si aggiorna (il promemoria riparte)");
+  assert.equal(mine.data.rotateDays, 90, "il promemoria di rotazione resta");
   await call("deleteItem", nid);
   assert.ok(!(await call("items", c.id)).some((i) => i.id === nid));
-  step("modifiche dal telefono: cartella, nuova password, OTP agganciato (chiave o QR), modifica, eliminazione");
+  step("modifiche dal telefono: cartella, nuova password, OTP agganciato (chiave o QR), modifica, data del cambio password e promemoria, eliminazione");
 
   // Autofill: dominio esatto, app associata, ricerca libera.
   const web = await call("lookup", "https://router.mobile.it/login");
