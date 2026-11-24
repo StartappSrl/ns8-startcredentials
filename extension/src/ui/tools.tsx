@@ -63,26 +63,38 @@ export function Search({ vault }: { vault: Vault }) {
   );
 }
 
-/** Risultati del controllo violazioni, solo in memoria e solo per questa sessione. */
-const breachCache = new Map<string, number>();
+/**
+ * Risultati del controllo violazioni, solo in memoria e legati alla cassaforte aperta:
+ * la chiave è elemento e revisione, mai la password.
+ */
+const breachResults = new WeakMap<Vault, Map<string, number>>();
+const rev = (e: HealthEntry) => `${e.item.id}:${e.item.revision}`;
+const BREACH_ORIGIN = "https://api.pwnedpasswords.com/*";
 
 /**
  * Controllo delle password comparse in violazioni note. Parte solo su richiesta,
  * perché contatta un servizio esterno (che riceve solo l'inizio dell'impronta).
  */
-function BreachCheck({ entries }: { entries: HealthEntry[] }) {
+function BreachCheck({ vault, entries }: { vault: Vault; entries: HealthEntry[] }) {
+  if (!breachResults.has(vault)) breachResults.set(vault, new Map());
+  const breachCache = breachResults.get(vault)!;
   const withPw = entries.filter((e) => e.item.data.password && !e.item.deletedAt);
   const [, setTick] = useState(0);
   const [progress, setProgress] = useState<string | null>(null);
   const { busy, error, run } = useAction();
-  const checked = withPw.filter((e) => breachCache.has(e.item.data.password!));
-  const found = checked.filter((e) => (breachCache.get(e.item.data.password!) ?? 0) > 0)
-    .sort((a, b) => (breachCache.get(b.item.data.password!) ?? 0) - (breachCache.get(a.item.data.password!) ?? 0));
+  const checked = withPw.filter((e) => breachCache.has(rev(e)));
+  const found = checked.filter((e) => (breachCache.get(rev(e)) ?? 0) > 0)
+    .sort((a, b) => (breachCache.get(rev(b)) ?? 0) - (breachCache.get(rev(a)) ?? 0));
   const allChecked = withPw.length > 0 && checked.length === withPw.length;
   const start = () => run(async () => {
-    const todo = withPw.map((e) => e.item.data.password!).filter((p) => !breachCache.has(p));
-    const r = await pwnedCounts(todo, { onProgress: (d, t) => setProgress(`Controllo ${d} di ${t}…`) });
-    for (const [pw, n] of r) breachCache.set(pw, n);
+    // Permesso esplicito per il solo servizio di controllo, chiesto al clic.
+    if (typeof chrome !== "undefined" && chrome.permissions?.request) {
+      const ok = await chrome.permissions.request({ origins: [BREACH_ORIGIN] });
+      if (!ok) throw new Error("Serve il permesso di contattare api.pwnedpasswords.com per fare il controllo.");
+    }
+    const todo = withPw.filter((e) => !breachCache.has(rev(e)));
+    const r = await pwnedCounts(todo.map((e) => e.item.data.password!), { onProgress: (d, t) => setProgress(`Controllo ${d} di ${t}…`) });
+    for (const e of todo) breachCache.set(rev(e), r.get(e.item.data.password!) ?? 0);
     setTick((x) => x + 1);
   }).finally(() => setProgress(null));
   if (!withPw.length) return null;
@@ -91,7 +103,8 @@ function BreachCheck({ entries }: { entries: HealthEntry[] }) {
       <h2>Comparse in violazioni note</h2>
       <p class="small muted">
         Confronta le password con l'archivio pubblico delle password trapelate (Have I Been Pwned). Dal computer esce solo l'inizio
-        dell'impronta di ogni password, mai la password: il confronto avviene qui.
+        dell'impronta di ogni password, mai la password: il confronto avviene qui. Al primo controllo il browser chiede il permesso
+        di contattare il servizio.
       </p>
       {!allChecked && (
         <button class="btn" style="align-self:flex-start" disabled={busy} onClick={start}>
@@ -103,7 +116,7 @@ function BreachCheck({ entries }: { entries: HealthEntry[] }) {
       {found.length > 0 && (
         <>
           <p class="small">Una password che compare in una violazione è nelle liste usate per indovinare le password: <b>va cambiata</b>, anche se è lunga.</p>
-          <div class="card list">{found.map((e) => <Row {...e} note={`trovata ${breachCache.get(e.item.data.password!)!.toLocaleString("it-IT")} volte`} />)}</div>
+          <div class="card list">{found.map((e) => <Row {...e} note={`trovata ${breachCache.get(rev(e))!.toLocaleString("it-IT")} volte`} />)}</div>
         </>
       )}
     </section>
@@ -152,7 +165,7 @@ export function Health({ vault, containerId }: { vault: Vault; containerId?: str
               <div class="card pad"><div class="small muted">{l}</div><div class="mono" style="font-size:26px">{n}</div></div>
             ))}
           </div>
-          <BreachCheck entries={(all.data ?? []).filter((e) => !containerId || e.container.id === containerId)} />
+          <BreachCheck vault={vault} entries={(all.data ?? []).filter((e) => !containerId || e.container.id === containerId)} />
           {report.reused.length > 0 && (
             <section class="stack">
               <h2>Usate in più punti</h2>

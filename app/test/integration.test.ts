@@ -769,6 +769,12 @@ describe("StartCredentials end-to-end", () => {
     assert.ok((await marco.auditLog({ containerId: cid })).some((l) => l.action === "container.member_expired"));
     const done = await marco.completePendingRotations();
     assert.ok(done.done.includes("Cliente a tempo"));
+    // Condividere di nuovo con chi è appena scaduto (prima della pulizia) ridà davvero l'accesso.
+    await marco.share(cid, state.saraId, "read", { expiresAt: in3days });
+    await db.query("UPDATE container_keys SET expires_at = now() - interval '1 minute' WHERE container_id = $1 AND user_id = $2", [cid, state.saraId]);
+    await marco.share(cid, state.saraId, "read");
+    assert.equal(await exp(), null);
+    assert.ok((await sara.containers()).some((c) => c.id === cid));
     // Togliere la scadenza.
     await marco.share(cid, state.saraId, "read", { expiresAt: in3days });
     await marco.share(cid, state.saraId, "read", { expiresAt: null });
@@ -779,20 +785,30 @@ describe("StartCredentials end-to-end", () => {
     const marco: Vault = state.marco;
     sentMail.length = 0;
     for (let i = 0; i < 6; i++) await assert.rejects(login(api(), "sara@azienda.it", "password sbagliata"));
+    // Per un indirizzo inesistente nessun avviso (e nessuna differenza di tempi).
+    for (let i = 0; i < 6; i++) await assert.rejects(login(api(), "nessuno@azienda.it", "password sbagliata"));
+    await new Promise((r) => setTimeout(r, 300));
     const failed = sentMail.filter((m) => m.to === "sara@azienda.it" && m.subject === "Tentativi di accesso non riusciti");
     assert.equal(failed.length, 1, "un solo avviso per raffica");
     assert.ok(!failed[0]!.text.includes("password sbagliata"));
-    // Export e rapporti: avvisati gli altri amministratori.
-    await marco.setUser(state.saraId, { role: "admin" });
+    // Altri tentativi nella stessa ora: niente nuove email (nessuna inondazione).
+    for (let i = 0; i < 3; i++) await assert.rejects(login(api(), "sara@azienda.it", "password sbagliata"));
+    await new Promise((r) => setTimeout(r, 300));
+    assert.equal(sentMail.filter((m) => m.subject === "Tentativi di accesso non riusciti").length, 1);
+    // Export e rapporti di Sara: avvisati gli amministratori (Marco).
+    const sara: Vault = state.sara;
     const cid = await marco.createContainer({ name: "Cliente esportato" });
+    await marco.share(cid, state.saraId, "read");
     sentMail.length = 0;
-    await marco.api.post("/audit/events", { action: "container.export", containerId: cid });
-    await marco.api.post("/audit/events", { action: "container.export", containerId: cid });
-    assert.equal(sentMail.filter((m) => m.to === "sara@azienda.it" && m.subject === "Export dei dati su StartCredentials").length, 1);
-    for (let i = 0; i < 6; i++) await marco.api.post("/audit/events", { action: "container.report", containerId: cid });
-    assert.equal(sentMail.filter((m) => m.to === "sara@azienda.it" && m.subject === "Molti rapporti generati su StartCredentials").length, 1);
+    await sara.api.post("/audit/events", { action: "container.export", containerId: cid });
+    await sara.api.post("/audit/events", { action: "container.export", containerId: cid });
+    await new Promise((r) => setTimeout(r, 300));
+    assert.ok(sentMail.some((m) => m.to === "sara@azienda.it" && m.subject === "Export dei dati su StartCredentials"), "avvisato anche chi esporta");
+    assert.equal(sentMail.filter((m) => m.to === "marco@azienda.it" && m.subject === "Export dei dati su StartCredentials").length, 1, "un avviso per export");
+    for (let i = 0; i < 6; i++) await sara.api.post("/audit/events", { action: "container.report", containerId: cid });
+    await new Promise((r) => setTimeout(r, 300));
+    assert.equal(sentMail.filter((m) => m.to === "marco@azienda.it" && m.subject === "Molti rapporti generati su StartCredentials").length, 1, "un avviso per raffica");
     assert.ok(sentMail.every((m) => !m.text.includes("Cliente esportato")), "niente nomi dei clienti nelle email");
-    await marco.setUser(state.saraId, { role: "user" });
   });
 
   test("notifiche email: nuovo accesso a un cliente e ingresso in un gruppo, senza nomi dei clienti", async () => {
@@ -1049,7 +1065,13 @@ describe("StartCredentials end-to-end", () => {
     await marco.setUser(state.lauraId, { status: "suspended" });
     await rejects(state.laura.api.get("/containers"), "unauthorized");
     await marco.setUser(state.lauraId, { status: "active" });
-    const log = await marco.auditLog({ limit: 500 });
+    const log: Awaited<ReturnType<Vault["auditLog"]>> = [];
+    for (let before: number | undefined, page = 0; page < 20; page++) {
+      const rows = await marco.auditLog({ limit: 500, before });
+      log.push(...rows);
+      if (rows.length < 500) break;
+      before = rows[rows.length - 1]!.id;
+    }
     for (const action of ["org.initialized", "user.key_certified", "container.key_rotated", "container.imported", "user.recovery_completed", "auth.login_failed",
                           "auth.mfa_backup_used", "user.mfa_reset", "user.password_changed", "user.offboarded", "container.export",
                           "group.created", "group.member_set", "group.member_removed", "group.key_rotated", "container.group_set", "org.key_rotated",

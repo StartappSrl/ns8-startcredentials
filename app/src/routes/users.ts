@@ -522,18 +522,23 @@ export async function userRoutes(app: FastifyInstance, ctx: Ctx) {
    * Avvisi agli amministratori: ogni export cifrato (porta fuori tutti i clienti
    * leggibili) e raffiche di rapporti (5 in un'ora dalla stessa persona).
    */
+  // Ultimo avviso inviato per persona e tipo: un export registra un evento per ogni
+  // contenitore, quindi si avvisa al primo e poi al massimo una volta all'ora.
+  const lastAlert = new Map<string, number>();
   async function alertExport(userId: string, action: "container.export" | "container.report", ip: string) {
     try {
+      const key = `${action}:${userId}`;
+      const quiet = 60 * 60_000;
+      if (Date.now() - (lastAlert.get(key) ?? 0) < quiet) return;
       if (action === "container.report") {
         const r = await db.query("SELECT count(*)::int AS n FROM audit_log WHERE actor_id = $1 AND action = 'container.report' AND at > now() - interval '1 hour'", [userId]);
-        if (r.rows[0].n !== 5) return;
-      } else {
-        // Un export registra un evento per ogni contenitore: si avvisa una volta ogni 10 minuti.
-        const r = await db.query("SELECT count(*)::int AS n FROM audit_log WHERE actor_id = $1 AND action = 'container.export' AND at > now() - interval '10 minutes'", [userId]);
-        if (r.rows[0].n !== 1) return;
+        if (r.rows[0].n < 5) return;
       }
+      lastAlert.set(key, Date.now());
+      if (lastAlert.size > 10_000) lastAlert.clear();
       const who = (await db.query("SELECT display_name, email FROM users WHERE id = $1", [userId])).rows[0];
-      const admins = await db.query("SELECT email FROM users WHERE role = 'admin' AND status = 'active' AND id <> $1", [userId]);
+      // Anche chi ha fatto l'operazione: se l'account è stato rubato, il titolare se ne accorge (e un amministratore unico è comunque avvisato).
+      const admins = await db.query("SELECT DISTINCT email FROM users WHERE status = 'active' AND (role = 'admin' OR id = $1)", [userId]);
       const subject = action === "container.export" ? "Export dei dati su StartCredentials" : "Molti rapporti generati su StartCredentials";
       const text = action === "container.export"
         ? `${who.display_name} (${who.email}) ha appena fatto un export cifrato dei clienti a cui ha accesso, dall'indirizzo ${ip}.\n\nSe non era previsto, verificalo nel registro attività.\n\n${ctx.cfg.publicUrl}\n`
@@ -558,7 +563,7 @@ export async function userRoutes(app: FastifyInstance, ctx: Ctx) {
       if (!it.rowCount) throw notFound();
     }
     await tx(db, (c) => audit(c, { actorId: a.id, action: body.action, targetType: body.itemId ? "item" : "container", targetId: body.itemId ?? body.containerId, containerId: body.containerId, ip: req.ip }));
-    if (body.action === "container.export" || body.action === "container.report") await alertExport(a.id, body.action, req.ip);
+    if (body.action === "container.export" || body.action === "container.report") void alertExport(a.id, body.action, req.ip);
     return { ok: true };
   });
 }

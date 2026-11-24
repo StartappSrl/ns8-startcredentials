@@ -74,26 +74,39 @@ export async function verifySecondFactor(c: Tx, ctx: Ctx, userId: string, code: 
   return "backup";
 }
 
+/** Soglie: tentativi falliti in 15 minuti oppure in 24 ore (chi prova piano non sfugge). */
+const ALERT_RULES = { "auth.login_failed": { short: 5, long: 20 }, "auth.mfa_failed": { short: 3, long: 10 } } as const;
+/** Ultimo avviso per persona e tipo: al massimo uno all'ora, così gli avvisi non diventano un modo per inondare la casella. */
+const lastAuthAlert = new Map<string, number>();
+export const AUTH_ALERT_QUIET_MS = 3600_000;
+
 /**
- * Avviso al titolare dell'account dopo troppi tentativi falliti in 15 minuti.
- * Si invia una sola volta per raffica (quando si raggiunge la soglia).
+ * Avviso al titolare dell'account dopo troppi tentativi falliti. Gira in background
+ * (non rallenta la risposta) e non lancia mai errori.
  */
-export async function alertRepeated(ctx: Ctx, userId: string, action: "auth.login_failed" | "auth.mfa_failed", threshold: number, ip: string) {
-  try {
+export function alertRepeated(ctx: Ctx, userId: string | null, action: "auth.login_failed" | "auth.mfa_failed", ip: string): void {
+  void (async () => {
+    // Stessa interrogazione anche per gli indirizzi inesistenti.
     const r = await ctx.db.query(
-      "SELECT count(*)::int AS n FROM audit_log WHERE actor_id = $1 AND action = $2 AND at > now() - interval '15 minutes'", [userId, action]);
-    if (r.rows[0].n !== threshold) return;
+      `SELECT count(*) FILTER (WHERE at > now() - interval '15 minutes')::int AS short, count(*)::int AS long
+         FROM audit_log WHERE actor_id = $1 AND action = $2 AND at > now() - interval '24 hours'`, [userId, action]);
+    if (!userId) return;
+    const rule = ALERT_RULES[action];
+    if (r.rows[0].short < rule.short && r.rows[0].long < rule.long) return;
+    const key = `${action}:${userId}`;
+    if (Date.now() - (lastAuthAlert.get(key) ?? 0) < AUTH_ALERT_QUIET_MS) return;
+    lastAuthAlert.set(key, Date.now());
+    if (lastAuthAlert.size > 10_000) lastAuthAlert.clear();
     const u = await ctx.db.query("SELECT email FROM users WHERE id = $1 AND status = 'active'", [userId]);
     if (!u.rows[0]) return;
+    const threshold = r.rows[0].short;
     const text = action === "auth.login_failed"
-      ? `Negli ultimi 15 minuti ci sono stati ${threshold} tentativi di accesso non riusciti al tuo account StartCredentials (ultimo dall'indirizzo ${ip}).\n\n` +
+      ? `Ci sono stati ripetuti tentativi di accesso non riusciti (${threshold} negli ultimi 15 minuti) al tuo account StartCredentials (ultimo dall'indirizzo ${ip}).\n\n` +
         `Se non sei stato tu, qualcuno sta provando a indovinare la tua master password: avvisa un amministratore.\n\n${ctx.cfg.publicUrl}\n`
-      : `Negli ultimi 15 minuti è stata inserita ${threshold} volte la tua master password corretta, ma con un codice di verifica errato (ultimo tentativo dall'indirizzo ${ip}).\n\n` +
+      : `È stata inserita più volte la tua master password corretta, ma con un codice di verifica errato (${threshold} negli ultimi 15 minuti) (ultimo tentativo dall'indirizzo ${ip}).\n\n` +
         `Se non sei stato tu, qualcuno conosce la tua master password: cambiala subito e avvisa un amministratore.\n\n${ctx.cfg.publicUrl}\n`;
     await ctx.mailer.send(u.rows[0].email, action === "auth.login_failed" ? "Tentativi di accesso non riusciti" : "Codice di verifica errato più volte", text);
-  } catch {
-    // L'avviso non deve mai bloccare l'accesso.
-  }
+  })().catch(() => undefined);
 }
 
 export async function authRoutes(app: FastifyInstance, ctx: Ctx) {
@@ -223,7 +236,8 @@ export async function authRoutes(app: FastifyInstance, ctx: Ctx) {
     }
     if (!ok || !pending.userId) {
       await tx(db, (c) => audit(c, { actorId: pending.userId, action: "auth.login_failed", ip: req.ip, details: { email: pending.email } }));
-      if (pending.userId) await alertRepeated(ctx, pending.userId, "auth.login_failed", 5, req.ip);
+      // In background e anche per indirizzi inesistenti: i tempi di risposta non rivelano quali account esistono.
+      alertRepeated(ctx, pending.userId, "auth.login_failed", req.ip);
       throw unauthorized("invalid_credentials");
     }
     return tx(db, async (c) => {
@@ -296,7 +310,7 @@ export async function authRoutes(app: FastifyInstance, ctx: Ctx) {
     });
     if (!ok) {
       await tx(db, (c) => audit(c, { actorId: a.id, action: "auth.mfa_failed", ip: req.ip }));
-      await alertRepeated(ctx, a.id, "auth.mfa_failed", 3, req.ip);
+      alertRepeated(ctx, a.id, "auth.mfa_failed", req.ip);
       throw badRequest("invalid_code");
     }
     return { state: "active" };

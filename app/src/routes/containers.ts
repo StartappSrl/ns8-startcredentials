@@ -218,20 +218,30 @@ export async function expireAccess(ctx: Ctx): Promise<number> {
     const rows = r.rows.filter((x) => x.current);
     for (const x of rows) {
       await c.query("UPDATE containers SET rotation_required = true WHERE id = $1", [x.container_id]);
-      await audit(c, { actorId: null, action: "container.member_expired", targetType: "user", targetId: x.user_id, containerId: x.container_id,
-        details: { permission: x.permission, expiresAt: x.expires_at } });
+      // Con l'accesso scade anche l'eventuale designazione d'emergenza.
+      await recordExpired(c, x.container_id, x.user_id, x.permission, x.expires_at);
     }
     return rows;
   });
-  for (const x of expired) {
-    const u = await ctx.db.query("SELECT email FROM users WHERE id = $1 AND status = 'active'", [x.user_id]);
+  await notifyExpired(ctx, expired.map((x) => x.user_id as string));
+  return expired.length;
+}
+
+/** Registro e pulizia di un accesso a tempo scaduto, dentro la transazione di chi lo trova. */
+async function recordExpired(c: Tx, containerId: string, userId: string, permission: string, expiresAt: Date, ip?: string): Promise<void> {
+  await c.query("DELETE FROM emergency_access WHERE container_id = $1 AND user_id = $2", [containerId, userId]);
+  await audit(c, { actorId: null, action: "container.member_expired", targetType: "user", targetId: userId, containerId, ip, details: { permission, expiresAt } });
+}
+
+async function notifyExpired(ctx: Ctx, userIds: string[]): Promise<void> {
+  for (const userId of userIds) {
+    const u = await ctx.db.query("SELECT email FROM users WHERE id = $1 AND status = 'active'", [userId]);
     if (u.rows[0]) {
       await ctx.mailer.send(u.rows[0].email, "Accesso scaduto su StartCredentials",
         `Il tuo accesso a tempo a un cliente su StartCredentials è scaduto ed è stato tolto.\n\n` +
         `Se ti serve ancora, chiedilo a un gestore del cliente.\n\n${ctx.cfg.publicUrl}\n`);
     }
   }
-  return expired.length;
 }
 
 export async function containerRoutes(app: FastifyInstance, ctx: Ctx) {
@@ -340,6 +350,13 @@ export async function containerRoutes(app: FastifyInstance, ctx: Ctx) {
         if (grant.permission !== "manage") throw badRequest("org_requires_manage");
       }
       if (grant.permission !== "manage" && (await managersLeft(c, id, p.keyVersion, grant.recipientId)) === 0) throw conflict("last_manager");
+      // Accesso a tempo già scaduto ma non ancora ripulito: si chiude come scaduto e si riparte da zero.
+      const old = await c.query("DELETE FROM container_keys WHERE container_id = $1 AND user_id = $2 AND expires_at <= now() RETURNING permission, expires_at",
+        [id, grant.recipientId]);
+      if (old.rowCount) {
+        await c.query("UPDATE containers SET rotation_required = true WHERE id = $1", [id]);
+        await recordExpired(c, id, grant.recipientId, old.rows[0].permission, old.rows[0].expires_at, req.ip);
+      }
       const existed = await c.query("SELECT 1 FROM container_keys WHERE container_id = $1 AND key_version = $2 AND user_id = $3", [id, p.keyVersion, grant.recipientId]);
       await insertGrant(c, grant, a.id);
       // Un gestore non ha mai una scadenza (il cliente deve restare gestibile).
@@ -390,7 +407,8 @@ export async function containerRoutes(app: FastifyInstance, ctx: Ctx) {
       // Consegne d'emergenza rinnovate con la nuova chiave (quelle mancanti restano da rinnovare).
       emergencyGrants: z.array(grantSchema).max(1000).default([]),
     }).parse(req.body);
-    return tx(db, async (c) => {
+    let expiredNow: string[] = [];
+    const out = await tx(db, async (c) => {
       await c.query("SELECT 1 FROM containers WHERE id = $1 FOR UPDATE", [id]);
       const p = await requirePermission(c, id, a.id, "manage");
       if (body.newKeyVersion !== p.keyVersion + 1) throw conflict("stale_key_version");
@@ -420,6 +438,11 @@ export async function containerRoutes(app: FastifyInstance, ctx: Ctx) {
         await c.query("UPDATE items SET ik_enc = $3, ik_key_version = $4 WHERE id = $1 AND container_id = $2", [itemId, id, ikEnc, body.newKeyVersion]);
       }
       await c.query("UPDATE containers SET key_version = $2, meta_key_enc = $3, rotation_required = false, updated_at = now() WHERE id = $1", [id, body.newKeyVersion, body.metaKeyEnc]);
+      // Accessi scaduti non ancora ripuliti: la rotazione li esclude, ma restano registrati e avvisati.
+      const lapsed = await c.query("SELECT user_id, permission, expires_at FROM container_keys WHERE container_id = $1 AND key_version = $2 AND expires_at <= now()",
+        [id, p.keyVersion]);
+      for (const x of lapsed.rows) await recordExpired(c, id, x.user_id, x.permission, x.expires_at, req.ip);
+      expiredNow = lapsed.rows.map((x) => x.user_id as string);
       // Gli accessi a tempo mantengono la loro scadenza anche con la nuova chiave.
       await c.query(
         `UPDATE container_keys n SET expires_at = o.expires_at FROM container_keys o
@@ -431,6 +454,8 @@ export async function containerRoutes(app: FastifyInstance, ctx: Ctx) {
       await audit(c, { actorId: a.id, action: "container.key_rotated", targetType: "container", targetId: id, containerId: id, ip: req.ip, details: { keyVersion: body.newKeyVersion, members: body.grants.length, groups: body.groupGrants.length, items: sent.size, emergency: renewed } });
       return { ok: true, keyVersion: body.newKeyVersion };
     });
+    await notifyExpired(ctx, expiredNow);
+    return out;
   });
 
   // ------------------------------------------------------------ condivisione con i gruppi

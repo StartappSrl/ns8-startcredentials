@@ -102,7 +102,8 @@ async function activate(c: Tx, r: Row): Promise<void> {
        VALUES ($1,$2,$3,$4,$5,$6,$7)
        ON CONFLICT (container_id, key_version, user_id)
        DO UPDATE SET sealed_key = EXCLUDED.sealed_key, permission = EXCLUDED.permission, granted_by = EXCLUDED.granted_by,
-                     signature = EXCLUDED.signature, created_at = now(), expires_at = NULL`,
+                     signature = EXCLUDED.signature, created_at = now(),
+                     expires_at = CASE WHEN container_keys.expires_at > now() THEN container_keys.expires_at ELSE NULL END`,
       [g.containerId, g.keyVersion, g.recipientId, g.sealedKey, g.permission, g.grantedBy, g.signature]);
   }
   await c.query("DELETE FROM emergency_access WHERE id = $1", [r.id]);
