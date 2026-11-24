@@ -1,9 +1,10 @@
 import { useEffect, useState } from "react";
-import { Alert, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
+import { Alert, Linking, Pressable, ScrollView, Share, StyleSheet, Text, View } from "react-native";
 import type { Item, ItemData, Me } from "@startcredentials/client";
+import { accessCodeMessage, whatsappCodeLink, whatsappNumber } from "../ui/send";
 import { useEngine } from "../engine/Engine";
 import { errorText, useApp } from "../state/App";
-import { Brand, Button, Card, Field, Notice } from "../ui/kit";
+import { Brand, Button, Card, CopyButton, Field, Notice } from "../ui/kit";
 import { Header } from "./Vault";
 import { color, mono } from "../theme";
 
@@ -360,6 +361,137 @@ export function RegisterScreen() {
         <Button title="Annulla" kind="ghost" onPress={() => { app.inviteToken.current = null; app.setPhase("login"); }} />
       </Card>
     </ScrollView>
+  );
+}
+
+// ------------------------------------------------------------------ invio sicuro
+
+type SendInfo = { supported: boolean; enabled: boolean; maxHours: number; domains: string[] };
+const DURATIONS: [number, string][] = [[1, "1 ora"], [24, "1 giorno"], [72, "3 giorni"], [168, "7 giorni"], [336, "14 giorni"], [720, "30 giorni"]];
+
+/** Invio sicuro a un destinatario anche esterno: cifrato sul telefono, codice da comunicare a parte. */
+export function SecureSendScreen({ item }: { item: Item }) {
+  const engine = useEngine();
+  const app = useApp();
+  const d = item.data;
+  const [info, setInfo] = useState<SendInfo | null>(null);
+  const [hasOtp, setHasOtp] = useState(false);
+  const [to, setTo] = useState("");
+  // Cellulare per il codice su WhatsApp: resta su questa schermata, non va al server.
+  const [phone, setPhone] = useState("");
+  const wa = whatsappNumber(phone);
+  const [hours, setHours] = useState(24);
+  const [views, setViews] = useState(1);
+  const [fields, setFields] = useState({ username: !!d.username, password: !!d.password, urls: !!d.urls?.length, notes: false, otp: false });
+  const [res, setRes] = useState<{ code: string; link: string; emailed: boolean } | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  useEffect(() => {
+    engine.call<SendInfo>("secureSendInfo").then((i) => {
+      setInfo(i);
+      const allowed = DURATIONS.filter(([h]) => h <= i.maxHours);
+      if (!allowed.some(([h]) => h === 24)) setHours(allowed[0]?.[0] ?? 1);
+    }).catch((e) => setError(errorText(e)));
+    engine.call<string | null>("effectiveTotp", item.id).then((u) => setHasOtp(!!u)).catch(() => undefined);
+  }, [item.id]);
+  const opts: [keyof typeof fields, string, boolean][] = [
+    ["username", "Nome utente", !!d.username], ["password", "Password", !!d.password], ["urls", "Indirizzi dei siti", !!d.urls?.length],
+    ["notes", "Note", !!d.notes], ["otp", "Chiave OTP", hasOtp],
+  ];
+  const create = async () => {
+    setBusy(true);
+    setError(null);
+    try {
+      setRes(await engine.call<{ code: string; link: string; emailed: boolean }>("createSecureSend", item.id,
+        { recipientEmail: to.trim(), expiresInHours: hours, maxViews: views, fields }));
+    } catch (e) {
+      setError(errorText(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  if (res) {
+    return (
+      <View style={{ flex: 1 }}>
+        <Header title="Invio sicuro creato" subtitle={d.name} />
+        <ScrollView contentContainerStyle={{ padding: 16, gap: 14 }}>
+          <Notice kind={res.emailed ? "ok" : "warn"}>
+            {res.emailed ? `Collegamento inviato per email a ${to.trim().toLowerCase()}.` : "Email non inviata: manda tu il collegamento qui sotto."}
+          </Notice>
+          <Card>
+            <Text style={st.h}>Codice di accesso</Text>
+            <Text style={st.sub}>Comunicalo per un canale diverso dall'email. Non viene salvato: annotalo ora se serve.</Text>
+            <Text selectable style={{ fontFamily: mono, fontSize: 22, letterSpacing: 2, color: color.ink }}>{res.code}</Text>
+            <View style={{ flexDirection: "row", gap: 8 }}>
+              <CopyButton value={res.code} toast={app.toast} />
+              <Button kind="secondary" title="Condividi il codice" style={st.small}
+                onPress={() => void Share.share({ message: accessCodeMessage(res.code) })} />
+            </View>
+            <Button title={wa ? `Invia il codice su WhatsApp a +${wa}` : "Invia il codice su WhatsApp"}
+              onPress={() => void Linking.openURL(whatsappCodeLink(res.code, wa || "")).catch(() => app.toast("WhatsApp non è installato"))} />
+            <Text style={st.sub}>Nel messaggio c'è solo il codice, non il collegamento: chi intercetta uno solo dei due canali non apre l'invio.</Text>
+          </Card>
+          {!res.emailed && (
+            <Card>
+              <Text style={st.h}>Collegamento</Text>
+              <Text selectable style={[st.sub, { fontFamily: mono }]}>{res.link}</Text>
+              <CopyButton value={res.link} toast={app.toast} />
+            </Card>
+          )}
+          <Text style={st.sub}>Riceverai un'email a ogni apertura. Puoi revocare l'invio dall'estensione, in Impostazioni → Invii sicuri.</Text>
+          <Button title="Fatto" onPress={() => app.pop()} />
+        </ScrollView>
+      </View>
+    );
+  }
+
+  return (
+    <View style={{ flex: 1 }}>
+      <Header title="Invia in modo sicuro" subtitle={d.name} back />
+      <ScrollView contentContainerStyle={{ padding: 16, gap: 14 }} keyboardShouldPersistTaps="handled">
+        {!info && !error && <Text style={st.sub}>Caricamento…</Text>}
+        {info && !info.enabled && <Notice kind="warn">L'invio sicuro è disattivato dall'amministratore.</Notice>}
+        {info && !info.supported && <Notice kind="warn">Questo telefono non supporta la cifratura dell'invio sicuro: usa l'estensione sul computer.</Notice>}
+        {info?.enabled && info.supported && (
+          <>
+            <Text style={st.sub}>I dati scelti vengono cifrati sul telefono. Il destinatario riceve per email un collegamento; per aprirlo serve un codice che gli comunicherai tu per un altro canale.</Text>
+            <Field label="Email del destinatario" value={to} onChangeText={setTo} keyboardType="email-address" placeholder="referente@cliente.it" />
+            {info.domains.length > 0 && <Text style={st.sub}>Domini ammessi: {info.domains.join(", ")}</Text>}
+            <Field label="Cellulare per il codice su WhatsApp (facoltativo)" value={phone} onChangeText={setPhone} keyboardType="phone-pad" placeholder="+39 333 1234567" />
+            {wa === null
+              ? <Text style={{ color: color.danger, fontSize: 13 }}>Numero non valido: usa il prefisso internazionale, per esempio +39 333 1234567.</Text>
+              : <Text style={st.sub}>Serve solo ad aprire WhatsApp sul contatto giusto: non viene salvato.</Text>}
+            <Card>
+              <Text style={st.h}>Cosa inviare</Text>
+              {opts.filter(([, , has]) => has).map(([k, label]) => (
+                <Pressable key={k} accessibilityRole="checkbox" accessibilityState={{ checked: fields[k] }} onPress={() => setFields({ ...fields, [k]: !fields[k] })} style={st.row}>
+                  <Text style={{ fontSize: 18, color: fields[k] ? color.accent : color.muted }}>{fields[k] ? "☑" : "☐"}</Text>
+                  <Text style={[st.name, { flex: 1 }]}>{label}</Text>
+                </Pressable>
+              ))}
+              {fields.otp && <Notice kind="warn">Con la chiave OTP il destinatario potrà generare codici anche in futuro, finché non la cambi alla fonte.</Notice>}
+            </Card>
+            <Card>
+              <Text style={st.h}>Scadenza</Text>
+              <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 8 }}>
+                {DURATIONS.filter(([h]) => h <= info.maxHours).map(([h, l]) => (
+                  <Button key={h} title={l} kind={hours === h ? "primary" : "secondary"} style={st.small} onPress={() => setHours(h)} />
+                ))}
+              </View>
+              <Text style={st.h}>Aperture consentite</Text>
+              <View style={{ flexDirection: "row", gap: 8 }}>
+                {[1, 2, 3, 5].map((n) => (
+                  <Button key={n} title={n === 1 ? "Una sola" : String(n)} kind={views === n ? "primary" : "secondary"} style={st.small} onPress={() => setViews(n)} />
+                ))}
+              </View>
+            </Card>
+            <Button title={busy ? "Cifratura…" : "Crea l'invio"} busy={busy} disabled={!to.trim() || wa === null || !Object.values(fields).some(Boolean)} onPress={() => void create()} />
+          </>
+        )}
+        {error && <Notice kind="error">{error}</Notice>}
+      </ScrollView>
+    </View>
   );
 }
 

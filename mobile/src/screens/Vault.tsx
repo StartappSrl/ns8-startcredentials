@@ -284,6 +284,9 @@ export function ItemScreen({ item, whereName, canWrite, canManage = false }: { i
             {canManage && online && <Button title={`Condividi solo questa${item.shares ? ` (${item.shares})` : ""}`} kind="secondary" onPress={() => app.push({ name: "itemShare", item })} style={{ flex: 1 }} />}
           </View>
         )}
+        {editable && !item.deletedAt && (
+          <Button title="Invia in modo sicuro" kind="secondary" onPress={() => app.push({ name: "secureSend", item })} />
+        )}
         {error && <Notice kind="error">{error}</Notice>}
         {item.sharedBy && <Text style={st.rowSub}>Password condivisa in sola lettura.</Text>}
       </ScrollView>

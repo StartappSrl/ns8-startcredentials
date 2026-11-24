@@ -8,7 +8,7 @@ import { LoginScreen, MfaScreen, MfaSetupScreen, SetupScreen } from "./src/scree
 import { ClientsScreen, ContainerScreen, ItemScreen, SearchScreen, SharedScreen } from "./src/screens/Vault";
 import { SettingsScreen } from "./src/screens/Settings";
 import { EditScreen } from "./src/screens/Edit";
-import { BackupCodesScreen, ChangePasswordScreen, HealthScreen, HistoryScreen, ItemShareScreen, RegisterScreen, ShareScreen } from "./src/screens/More";
+import { BackupCodesScreen, ChangePasswordScreen, HealthScreen, HistoryScreen, ItemShareScreen, RegisterScreen, SecureSendScreen, ShareScreen } from "./src/screens/More";
 import { color } from "./src/theme";
 
 const TABS: { route: Route; label: string }[] = [
@@ -40,6 +40,7 @@ function Main() {
     r.name === "history" ? <HistoryScreen item={r.item} where={r.where} /> :
     r.name === "share" ? <ShareScreen containerId={r.containerId} title={r.title} /> :
     r.name === "itemShare" ? <ItemShareScreen item={r.item} /> :
+    r.name === "secureSend" ? <SecureSendScreen item={r.item} /> :
     r.name === "health" ? <HealthScreen /> :
     r.name === "changePassword" ? <ChangePasswordScreen /> :
     r.name === "backupCodes" ? <BackupCodesScreen /> :

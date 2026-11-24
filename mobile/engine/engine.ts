@@ -90,6 +90,22 @@ const methods: Record<string, (...args: never[]) => unknown> = {
     return { ok: true };
   },
   status: async () => serverStatus(needApi()),
+  /** Invio sicuro possibile su questo telefono (serve WebCrypto nella WebView) e regole del server. */
+  async secureSendInfo() {
+    const supported = !!globalThis.crypto?.subtle;
+    const p = (await serverStatus(needApi())).policy?.secureSend;
+    return { supported, enabled: p?.enabled !== false, maxHours: p?.maxHours ?? 168, domains: p?.domains ?? [] };
+  },
+  /** Cifra qui i campi scelti; il server riceve solo il pacchetto cifrato, mai il codice. */
+  async createSecureSend(itemId: string, opts: {
+    recipientEmail: string; expiresInHours: number; maxViews: number;
+    fields: { username?: boolean; password?: boolean; urls?: boolean; notes?: boolean; otp?: boolean };
+  }) {
+    const it = itemCache.get(itemId);
+    if (!it) throw new Error("Elemento non trovato: ricarica il cliente");
+    if (!globalThis.crypto?.subtle) throw new Error("Questo telefono non supporta la cifratura dell'invio sicuro: usa l'estensione sul computer");
+    return needVault().createSecureSend(it, opts);
+  },
   /** Lunghezza minima della master password decisa dall'azienda. */
   passwordPolicy: async () => passwordPolicy(needApi()),
   setToken(token: string | null) { needApi().token = token ?? undefined; return true; },

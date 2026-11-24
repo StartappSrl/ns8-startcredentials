@@ -15,6 +15,7 @@ export type Route =
   | { name: "history"; item: Item; where: string }
   | { name: "share"; containerId: string; title: string }
   | { name: "itemShare"; item: Item }
+  | { name: "secureSend"; item: Item }
   | { name: "health" } | { name: "changePassword" } | { name: "backupCodes" }
   | { name: "edit"; containerId: string; containerTitle: string; item?: Item };
 

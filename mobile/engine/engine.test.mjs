@@ -182,6 +182,25 @@ try {
   assert.equal(mine.folderId, null);
   assert.ok(mine.data.passwordChangedAt > firstChange, "cambiando password dal telefono la data si aggiorna (il promemoria riparte)");
   assert.equal(mine.data.rotateDays, 90, "il promemoria di rotazione resta");
+  // Invio sicuro dal telefono: cifrato nel motore, il server riceve solo il pacchetto cifrato.
+  const sinfo = await call("secureSendInfo");
+  assert.equal(sinfo.supported, true);
+  assert.equal(sinfo.enabled, true);
+  const sent = await call("createSecureSend", nid, { recipientEmail: "referente@cliente.it", expiresInHours: 24, maxViews: 1, fields: { username: true, password: true } });
+  assert.match(sent.code, /^[A-Z2-9]{4}-[A-Z2-9]{4}-[A-Z2-9]{4}-[A-Z2-9]{4}$/);
+  const row = (await db.query("SELECT envelope FROM secure_sends ORDER BY created_at DESC LIMIT 1")).rows[0];
+  assert.ok(!row.envelope.includes("nuova!") && !row.envelope.includes(sent.code), "nel database niente password né codice");
+  const opened = await (await fetch(`${serverUrl}/api/v1/sends/open`, { method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ token: sent.link.split("#")[1] }) })).json();
+  const payload = await sdk.decryptSend(opened.envelope, sent.code);
+  assert.equal(payload.password, "nuova!");
+  assert.equal(payload.username, "admin");
+  assert.equal(payload.urls, undefined, "solo i campi scelti");
+  // Le funzioni WhatsApp dell'app coincidono con quelle dell'estensione.
+  const mobileSend = await import(join(root, "mobile/src/ui/send.ts"));
+  for (const n of ["333 123 4567", "+39 333 1234567", "0039 3331234567", "12", ""]) assert.equal(mobileSend.whatsappNumber(n), sdk.whatsappNumber(n), n);
+  assert.equal(mobileSend.whatsappCodeLink(sent.code, "393331234567"), sdk.whatsappCodeLink(sent.code, "393331234567"));
+  step("invio sicuro dal telefono: cifrato nel motore, solo i campi scelti, codice WhatsApp come nell'estensione");
   await call("deleteItem", nid);
   assert.ok(!(await call("items", c.id)).some((i) => i.id === nid));
   step("modifiche dal telefono: cartella, nuova password, OTP agganciato (chiave o QR), modifica, data del cambio password e promemoria, eliminazione");

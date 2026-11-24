@@ -2,7 +2,7 @@ import { ComponentChildren } from "preact";
 import { useEffect, useMemo, useRef, useState } from "preact/hooks";
 import {
   Container, DirectoryUser, effectiveTotpUri, Folder, generatePassword, Item, ItemData, KEEPASS_TOTP_FIELDS, passwordChangedAt, Permission, ROTATION_CHOICES,
-  rotationStatus, serverStatus, Vault,
+  rotationStatus, serverStatus, Vault, whatsappCodeLink, whatsappNumber,
 } from "@startcredentials/client";
 import {
   ClientsView, download, errorText, Favorite, initials, loadClientsView, loadExpanded, loadFavorites, loadVersions, lock, relTime, saveClientsView, saveExpanded,
@@ -1331,25 +1331,7 @@ function ShareDialog({ vault, container, onClose }: { vault: Vault; container: C
   );
 }
 
-/**
- * Numero per wa.me: solo cifre con prefisso internazionale.
- * "+39 333…", "0039 333…" e i cellulari italiani senza prefisso ("333…") diventano "39333…".
- * Restituisce "" se vuoto, null se non valido.
- */
-export function whatsappNumber(raw: string): string | null {
-  let s = raw.replace(/[\s().-]/g, "");
-  if (!s) return "";
-  if (s.startsWith("+")) s = s.slice(1);
-  else if (s.startsWith("00")) s = s.slice(2);
-  else if (/^3\d{8,9}$/.test(s)) s = `39${s}`;
-  return /^[1-9]\d{7,14}$/.test(s) ? s : null;
-}
-
-/** Collegamento WhatsApp con il solo codice: il collegamento all'invio resta nell'email (due canali separati). */
-export function whatsappCodeLink(code: string, phone: string): string {
-  const text = `Ciao, ti ho appena inviato per email un collegamento sicuro (StartCredentials). Per aprirlo usa questo codice: ${code}`;
-  return `https://wa.me/${phone}?text=${encodeURIComponent(text)}`;
-}
+export { whatsappCodeLink, whatsappNumber };
 
 /** Invio sicuro a un destinatario anche esterno: cifrato qui, codice da comunicare a parte. */
 function SecureSendDialog({ vault, item, policy, onClose }: {
