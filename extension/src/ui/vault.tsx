@@ -10,6 +10,7 @@ import {
 } from "../shared";
 import { Brand, CopyButton, Dialog, ErrorNote, Meter, OtpCode, Secret, useAction, useLoad, useToast } from "./kit";
 import { ReportDialog } from "./report";
+import { EmergencyAlerts, EmergencyDialog } from "./emergency";
 
 /** Indirizzo apribile: senza protocollo si usa HTTPS; solo http/https sono ammessi. */
 export function siteUrl(u: string): string {
@@ -131,6 +132,7 @@ export function Shell({ vault, route, children, counts }: { vault: Vault; route:
           {link("/clienti", "Clienti", counts.clients)}
           {link("/condivisi", "Condivisi con me", counts.shared)}
           {link("/salute", "Salute password")}
+          {link("/emergenza", "Accesso d'emergenza")}
           {link("/generatore", "Generatore")}
           {link("/import", "Importa")}
         </div>
@@ -234,6 +236,7 @@ export function Clients({ vault, containers, reload, shared }: { vault: Vault; c
           </div>
         </div>
       </div>
+      {!shared && <EmergencyAlerts vault={vault} containers={containers} onChanged={reload} />}
       {!shared && !selecting && !q && <FavoritesSection vault={vault} containers={containers} />}
       {list.length === 0 ? (
         <div class="card empty">
@@ -523,6 +526,7 @@ export function ContainerView({ vault, id, focusItem, onChanged }: { vault: Vaul
   const [folder, setFolder] = useState<string | null>(null);
   const [pane, setPane] = useState<"folders" | "items" | "detail">("folders");
   const [reporting, setReporting] = useState(false);
+  const [emergency, setEmergency] = useState(false);
   const fav = useFavorites(vault);
   const bulk = useAction();
   useEffect(() => { setChecked(new Set()); }, [tab, id]);
@@ -778,6 +782,7 @@ export function ContainerView({ vault, id, focusItem, onChanged }: { vault: Vaul
           {c.kind === "client" && <button class="btn" onClick={() => setReporting(true)}>Rapporto</button>}
           {canManage && c.kind === "client" && <button class="btn" onClick={() => setEditMeta(true)}>Modifica cliente</button>}
           {canManage && c.kind === "client" && <button class="btn" onClick={() => setSharing(true)}>Condividi</button>}
+          {canManage && c.kind === "client" && <button class="btn" onClick={() => setEmergency(true)}>Accesso d'emergenza</button>}
           {canWrite && <button class="btn" onClick={() => setNewFolder(true)}>Nuova cartella</button>}
           {canWrite && <button class="btn primary" onClick={() => setEditing("new")}>Nuovo elemento</button>}
         </div>
@@ -888,6 +893,7 @@ export function ContainerView({ vault, id, focusItem, onChanged }: { vault: Vaul
         </Dialog>
       )}
       {sharing && <ShareDialog vault={vault} container={c} onClose={() => { setSharing(false); reloadAll(); }} />}
+      {emergency && <EmergencyDialog vault={vault} container={c} onClose={() => { setEmergency(false); reloadAll(); }} />}
       {reporting && (
         <Dialog title={`Rapporto · ${c.meta.name}`} onClose={() => setReporting(false)} wide>
           <ReportDialog vault={vault} container={c} pathOf={(fid) => (fid ? folderPath(c.folders, fid) : "")} onClose={() => setReporting(false)} />

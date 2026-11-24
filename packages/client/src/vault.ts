@@ -87,6 +87,15 @@ export interface Item {
   /** Solo per gli elementi ricevuti in condivisione: chi li ha condivisi. */
   sharedBy?: string;
 }
+export type EmergencyStatus = "idle" | "pending" | "ready" | "rejected" | "stale";
+export interface EmergencyDesignation {
+  userId: string; displayName: string; email: string; permission: Permission; waitHours: number; createdBy: string; createdAt: string;
+  requestedAt: string | null; rejectedAt: string | null; status: EmergencyStatus; activatesAt: string | null;
+}
+export interface MyEmergency {
+  id: string; containerId: string; name: string; sector: string; permission: Permission; waitHours: number; createdBy: string; createdAt: string;
+  requestedAt: string | null; rejectedAt: string | null; status: EmergencyStatus; activatesAt: string | null;
+}
 export interface DirectoryUser {
   id: string; email: string; displayName: string; role: "admin" | "user"; status: "active" | "suspended"; keyVersion: number;
   publicKeys: PublicKeys; certification: string | null; verified: boolean; fingerprint: string;
@@ -858,14 +867,94 @@ export class Vault {
       }
     }
     const items = [...live, ...trash].map((i) => ({ id: i.id, ikEnc: rewrapItemKey(old.ck, ck, newVersion, containerId, i.id, i.ikEnc) }));
+    // Accessi d'emergenza: la consegna trattenuta viene preparata con la nuova chiave.
+    // Un designato senza chiave certificata resta "da rinnovare" invece di bloccare la rotazione.
+    const emergencyGrants = c.kind === "client" && c.permission === "manage"
+      ? (await this.emergencyDesignations(containerId).catch(() => [])).flatMap((e) => {
+        const pub = dir.find((u) => u.id === e.userId && u.verified && u.status === "active")?.publicKeys;
+        return pub ? [grantContainerKey({ containerKey: ck, containerId, keyVersion: newVersion, recipientId: e.userId, recipientPublic: pub, permission: e.permission, grantor: this.self })] : [];
+      })
+      : [];
     await this.api.post(`/containers/${containerId}/rotate`, {
       newKeyVersion: newVersion,
       metaKeyEnc: seal(ck, old.metaKey, ctxs.metaKey(containerId), `ck:${containerId}:${newVersion}`),
-      grants, groupGrants, items,
+      grants, groupGrants, items, emergencyGrants,
     });
     wipe(old.ck);
     this.cks.set(containerId, { ...old, version: newVersion, ck });
     return newVersion;
+  }
+
+  // ---------------------------------------------------------------- accesso d'emergenza
+
+  /** Designazioni d'emergenza di un cliente (solo per chi lo gestisce). */
+  async emergencyDesignations(containerId: string): Promise<EmergencyDesignation[]> {
+    return this.api.get(`/containers/${containerId}/emergency`);
+  }
+
+  /**
+   * Designa un collega per l'accesso d'emergenza: la consegna della chiave viene
+   * preparata subito (cifrata per lui e firmata) ma il server la rilascia solo
+   * dopo la sua richiesta e il tempo di attesa senza rifiuti.
+   */
+  async designateEmergency(containerId: string, userId: string, permission: Permission, waitHours: number): Promise<void> {
+    const c = await this.container(containerId);
+    if (c.kind !== "client") throw new SecurityError("L'accesso d'emergenza è previsto solo per i clienti");
+    const k = this.cks.get(containerId)!;
+    const recipient = (await this.directory(true)).find((u) => u.id === userId);
+    if (!recipient?.verified) throw new SecurityError("Il collega non ha una chiave certificata: chiedi a un amministratore di verificarla");
+    if (recipient.status !== "active") throw new SecurityError("Il collega è sospeso");
+    const grant = grantContainerKey({ containerKey: k.ck, containerId, keyVersion: k.version, recipientId: userId, recipientPublic: recipient.publicKeys, permission, grantor: this.self });
+    const labelEnc = sealToPublicKey(json({ containerId, name: c.meta.name, sector: c.meta.sector ?? "" }), recipient.publicKeys.box);
+    try {
+      await this.api.put(`/containers/${containerId}/emergency`, { grant, labelEnc, waitHours });
+    } catch (e) {
+      if (e instanceof ApiError && e.code === "stale_key_version") {
+        this.forget(containerId);
+        return this.designateEmergency(containerId, userId, permission, waitHours);
+      }
+      throw e;
+    }
+  }
+
+  async removeEmergency(containerId: string, userId: string): Promise<void> {
+    await this.api.del(`/containers/${containerId}/emergency/${userId}`);
+  }
+
+  async rejectEmergency(containerId: string, userId: string): Promise<void> {
+    await this.api.post(`/containers/${containerId}/emergency/${userId}/reject`, {});
+  }
+
+  async approveEmergency(containerId: string, userId: string): Promise<void> {
+    await this.api.post(`/containers/${containerId}/emergency/${userId}/approve`, {});
+  }
+
+  /** Richieste in corso sui clienti che gestisco. */
+  async pendingEmergencies(): Promise<{ containerId: string; userId: string; displayName: string; requestedAt: string; activatesAt: string }[]> {
+    return this.api.get("/emergency/pending");
+  }
+
+  /** Clienti per cui sono designato, con il nome aperto in locale. */
+  async myEmergencyAccess(): Promise<MyEmergency[]> {
+    const raw = await this.api.get<(Omit<MyEmergency, "name" | "sector"> & { labelEnc: string })[]>("/emergency");
+    return raw.map(({ labelEnc, ...r }) => {
+      let label = { name: "Cliente (nome non verificabile)", sector: "" };
+      try {
+        const l = unjson<{ containerId?: string; name: string; sector?: string }>(openSealed(labelEnc, this.keys.publicKeys.box, this.keys.boxPrivate));
+        // Il nome vale solo se è stato sigillato per questo cliente: il server non può scambiare le etichette.
+        if (l.containerId === r.containerId) label = { name: l.name, sector: l.sector ?? "" };
+      } catch { /* etichetta illeggibile: si mostra un nome generico */ }
+      return { ...r, name: String(label.name).slice(0, 200), sector: String(label.sector ?? "").slice(0, 200) };
+    });
+  }
+
+  async requestEmergency(id: string): Promise<{ activatesAt: string }> {
+    return this.api.post(`/emergency/${id}/request`, {});
+  }
+
+  async claimEmergency(id: string): Promise<string> {
+    const r = await this.api.post<{ containerId: string }>(`/emergency/${id}/claim`, {});
+    return r.containerId;
   }
 
   /**

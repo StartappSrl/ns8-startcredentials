@@ -7,6 +7,7 @@ import { ErrorNote, ToastHost, useLoad } from "./ui/kit";
 import { Clients, ContainerView, go, SharedItems, Shell, useRoute } from "./ui/vault";
 import { Audit, Generator, Import, Org, SettingsPage, Users } from "./ui/admin";
 import { Health, Search } from "./ui/tools";
+import { EmergencyPage } from "./ui/emergency";
 import { Groups } from "./ui/groups";
 
 type Phase =
@@ -153,6 +154,7 @@ function Main({ vault }: { vault: Vault }) {
     );
   }
   else if (route === "/generatore") page = <Generator />;
+  else if (route === "/emergenza") page = <EmergencyPage vault={vault} onChanged={containers.reload} />;
   else if (route === "/cerca") page = <Search vault={vault} />;
   else if (route === "/salute" || route.startsWith("/salute/")) page = <Health vault={vault} containerId={route.match(/^\/salute\/([0-9a-f-]{36})$/)?.[1]} />;
   else if (route === "/import") page = <Import vault={vault} containers={list} onChanged={containers.reload} />;

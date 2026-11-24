@@ -274,6 +274,8 @@ export async function userRoutes(app: FastifyInstance, ctx: Ctx) {
           `UPDATE containers SET rotation_required = true WHERE id IN (
              SELECT gk.container_id FROM container_group_keys gk WHERE gk.group_id = ANY($1::uuid[]))`, [groupIds]);
       }
+      // Chi esce non può più ottenere accessi d'emergenza.
+      await c.query("DELETE FROM emergency_access WHERE user_id = $1 OR created_by = $1", [id]);
       await c.query("UPDATE users SET status = 'suspended', role = 'user' WHERE id = $1", [id]);
       await c.query("UPDATE trusted_devices SET revoked_at = now() WHERE user_id = $1 AND revoked_at IS NULL", [id]);
       await c.query("DELETE FROM sessions WHERE user_id = $1", [id]);

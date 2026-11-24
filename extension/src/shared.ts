@@ -206,6 +206,12 @@ export function errorText(e: unknown): string {
     last_group_manager: "Il gruppo deve avere almeno un gestore.",
     group_managers_must_be_admins: "Solo gli amministratori possono essere gestori di un gruppo.",
     group_manager_required: "Solo i gestori del gruppo possono modificarlo.",
+    emergency_not_ready: "Il tempo di attesa non è ancora trascorso.",
+    emergency_pending: "C'è una richiesta in corso: rifiutala o approvala prima.",
+    already_member: "Questa persona ha già accesso al cliente.",
+    cannot_designate_self: "Non puoi designare te stesso.",
+    clients_only: "L'accesso d'emergenza è previsto solo per i clienti.",
+    no_pending_request: "Non c'è nessuna richiesta in corso.",
   };
   const err = e as { code?: string; message?: string };
   return (err.code && map[err.code]) || err.message || "Errore imprevisto.";
@@ -334,7 +340,10 @@ export const ACTION_LABEL: Record<string, string> = {
   "user.recovery_started": "Recupero avviato", "user.recovery_completed": "Recupero completato", "org.initialized": "Organizzazione inizializzata",
   "container.created": "Cliente creato", "container.updated": "Cliente modificato", "container.deleted": "Cliente eliminato",
   "container.member_set": "Accesso concesso", "container.member_removed": "Accesso rimosso", "container.key_rotated": "Chiave ruotata",
-  "container.imported": "Import", "container.export": "Export", "container.report": "Rapporto del cliente generato", "folder.created": "Cartella creata", "folder.deleted": "Cartella eliminata",
+  "container.imported": "Import", "container.export": "Export", "container.report": "Rapporto del cliente generato",
+  "emergency.designated": "Designato per l'accesso d'emergenza", "emergency.removed": "Designazione d'emergenza tolta",
+  "emergency.requested": "Accesso d'emergenza richiesto", "emergency.rejected": "Accesso d'emergenza rifiutato",
+  "emergency.approved": "Accesso d'emergenza approvato", "emergency.granted": "Accesso d'emergenza concesso dopo l'attesa", "folder.created": "Cartella creata", "folder.deleted": "Cartella eliminata",
   "item.created": "Elemento creato", "item.updated": "Elemento modificato", "item.deleted": "Elemento nel cestino", "item.restored": "Elemento ripristinato",
   "item.reveal": "Password mostrata", "item.copy": "Password copiata", "item.fill": "Compilazione automatica", "item.totp_copy": "OTP copiato",
   "attachment.added": "Allegato aggiunto", "attachment.deleted": "Allegato eliminato",

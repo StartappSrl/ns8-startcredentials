@@ -12,6 +12,7 @@ import { containerRoutes } from "./routes/containers.js";
 import { itemRoutes } from "./routes/items.js";
 import { groupRoutes } from "./routes/groups.js";
 import { sendRoutes } from "./routes/sends.js";
+import { emergencyRoutes } from "./routes/emergency.js";
 import { createMailer, Mailer } from "./mail.js";
 
 export interface AuthUser {
@@ -128,6 +129,7 @@ export async function buildApp(cfg: Config, db: Db, opts: { mailer?: Mailer } = 
   await itemRoutes(app, ctx);
   await groupRoutes(app, ctx);
   await sendRoutes(app, ctx);
+  await emergencyRoutes(app, ctx);
 
   // Pagine pubbliche: nessuno script, nessuno stile in linea; risorse con la versione nell'indirizzo.
   const PAGE_CSP = "default-src 'none'; style-src 'self'; img-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'";

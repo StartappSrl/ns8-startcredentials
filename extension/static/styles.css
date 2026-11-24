@@ -276,3 +276,8 @@ span.folder-chev { cursor: default; }
 .favorites { flex: none; margin-bottom: 4px; }
 .fav-row { display: flex; align-items: center; gap: 8px; cursor: default; }
 .fav-row > a.grow:hover span:first-child { text-decoration: underline; }
+
+/* Accesso d'emergenza */
+.emergency-list { flex: none; }
+.emergency-row { gap: 8px; }
+.emergency-row .badge { white-space: nowrap; }

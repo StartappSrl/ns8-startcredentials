@@ -677,6 +677,66 @@ describe("StartCredentials end-to-end", () => {
     assert.ok(!ch2.containers.includes(secret));
   });
 
+  test("accesso d'emergenza: consegna trattenuta, richiesta, rifiuto, attesa, rotazione, firma e concessione", async () => {
+    const marco: Vault = state.marco;
+    const sara: Vault = state.sara;
+    await sara.refreshMe();
+    const cid = await marco.createContainer({ name: "Cliente Emergenza", sector: "Prova" });
+    const iid = await marco.createItem(cid, { type: "login", name: "Router", password: "Segreto-Emergenza-1!" });
+    await marco.designateEmergency(cid, state.saraId, "write", 48);
+    // Il designato vede il nome del cliente (sigillato per lui) ma non ha accesso.
+    const mine = (await sara.myEmergencyAccess()).find((e) => e.containerId === cid)!;
+    assert.equal(mine.name, "Cliente Emergenza");
+    assert.equal(mine.status, "idle");
+    assert.ok(!(await sara.containers()).some((c) => c.id === cid));
+    await assert.rejects(sara.claimEmergency(mine.id), (e: { code?: string }) => e.code === "emergency_not_ready");
+    // La consegna trattenuta non viene mai restituita al designato.
+    const sealed = (await db.query("SELECT sealed_key FROM emergency_access WHERE id = $1", [mine.id])).rows[0].sealed_key;
+    assert.ok(!JSON.stringify(await sara.api.get("/emergency")).includes(sealed));
+    // Richiesta: gestori e amministratori avvisati, senza il nome del cliente.
+    sentMail.length = 0;
+    await sara.requestEmergency(mine.id);
+    assert.ok(sentMail.some((m) => m.to === "marco@azienda.it" && /accesso d'emergenza/.test(m.text)));
+    assert.ok(sentMail.every((m) => !m.text.includes("Cliente Emergenza")), "il nome del cliente non va nelle email");
+    assert.ok((await marco.pendingEmergencies()).some((p) => p.containerId === cid && p.userId === state.saraId));
+    await assert.rejects(sara.requestEmergency(mine.id), (e: { code?: string }) => e.code === "already_requested");
+    // Una designazione con richiesta in corso non si può sovrascrivere senza decidere.
+    await assert.rejects(marco.designateEmergency(cid, state.saraId, "manage", 24), (e: { code?: string }) => e.code === "emergency_pending");
+    // Rifiuto: niente nuove richieste finché un gestore non la riattiva.
+    await marco.rejectEmergency(cid, state.saraId);
+    await assert.rejects(sara.requestEmergency(mine.id), (e: { code?: string }) => e.code === "rejected");
+    await marco.designateEmergency(cid, state.saraId, "write", 48);
+    await sara.requestEmergency(mine.id);
+    // Attesa minima di 24 ore imposta dal server.
+    await assert.rejects(sara.api.put(`/containers/${cid}/emergency`, { grant: {}, labelEnc: "x", waitHours: 1 }));
+    // Una rotazione nel frattempo rinnova la consegna con la nuova chiave.
+    await marco.rotate(cid);
+    assert.equal((await marco.emergencyDesignations(cid))[0]!.status, "pending");
+    await db.query("UPDATE emergency_access SET requested_at = now() - interval '49 hours' WHERE id = $1", [mine.id]);
+    // Un permesso alterato sul server invalida la firma: niente accesso.
+    await db.query("UPDATE emergency_access SET permission = 'manage' WHERE id = $1", [mine.id]);
+    await assert.rejects(sara.claimEmergency(mine.id), (e: { code?: string }) => e.code === "emergency_stale");
+    await db.query("UPDATE emergency_access SET permission = 'write' WHERE id = $1", [mine.id]);
+    assert.equal(await sara.claimEmergency(mine.id), cid);
+    assert.equal((await sara.items(cid)).find((i) => i.id === iid)!.data.password, "Segreto-Emergenza-1!");
+    assert.equal((await sara.containers()).find((c) => c.id === cid)!.permission, "write");
+    assert.ok(!(await sara.myEmergencyAccess()).some((e) => e.containerId === cid), "la designazione è consumata");
+    const log = await marco.auditLog({ containerId: cid });
+    for (const a of ["emergency.designated", "emergency.requested", "emergency.rejected", "emergency.granted"]) assert.ok(log.some((l) => l.action === a), a);
+    // Approvazione anticipata da un gestore.
+    const cid2 = await marco.createContainer({ name: "Cliente Emergenza 2" });
+    await marco.designateEmergency(cid2, state.saraId, "read", 72);
+    const m2 = (await sara.myEmergencyAccess()).find((e) => e.containerId === cid2)!;
+    await sara.requestEmergency(m2.id);
+    await marco.approveEmergency(cid2, state.saraId);
+    assert.equal((await sara.containers()).find((c) => c.id === cid2)!.permission, "read");
+    // Chi viene tolto dal cliente perde la designazione, anche se ne aveva una per un permesso più alto.
+    await marco.designateEmergency(cid2, state.saraId, "manage", 24);
+    await marco.revoke(cid2, state.saraId);
+    assert.equal((await marco.emergencyDesignations(cid2)).length, 0);
+    assert.ok(!(await sara.myEmergencyAccess()).some((e) => e.containerId === cid2));
+  });
+
   test("notifiche email: nuovo accesso a un cliente e ingresso in un gruppo, senza nomi dei clienti", async () => {
     const marco: Vault = state.marco;
     sentMail.length = 0;

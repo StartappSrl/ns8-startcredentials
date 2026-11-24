@@ -4,6 +4,7 @@ import { grantMessage, groupContainerMessage, verify } from "@startcredentials/c
 import { audit, badRequest, conflict, Db, forbidden, notFound, Tx, tx } from "../core.js";
 import { Ctx, requireAuth } from "../server.js";
 import { schemas } from "./auth.js";
+import { renewEmergencyGrants } from "./emergency.js";
 
 const { b64, envelope } = schemas;
 const uuid = z.string().uuid();
@@ -60,6 +61,18 @@ export async function requirePermission(db: Db | Tx, containerId: string, userId
  * server: un client manomesso non può alterare permessi o destinatari.
  */
 export async function insertGrant(c: Tx, g: Grant, actorId: string): Promise<void> {
+  await checkGrant(c, g, actorId);
+  await c.query(
+    `INSERT INTO container_keys (container_id, key_version, user_id, sealed_key, permission, granted_by, signature)
+     VALUES ($1,$2,$3,$4,$5,$6,$7)
+     ON CONFLICT (container_id, key_version, user_id)
+     DO UPDATE SET sealed_key = EXCLUDED.sealed_key, permission = EXCLUDED.permission, granted_by = EXCLUDED.granted_by,
+                   signature = EXCLUDED.signature, created_at = now()`,
+    [g.containerId, g.keyVersion, g.recipientId, g.sealedKey, g.permission, g.grantedBy, g.signature]);
+}
+
+/** Firma di chi concede e stato del destinatario (attivo e con chiave certificata). */
+export async function checkGrant(c: Tx, g: Grant, actorId: string): Promise<void> {
   if (g.grantedBy !== actorId) throw badRequest("grant_not_signed_by_actor");
   const grantor = await c.query(
     "SELECT k.sign_public FROM users u JOIN user_keys k ON k.user_id = u.id AND k.version = u.key_version WHERE u.id = $1", [actorId]);
@@ -72,13 +85,6 @@ export async function insertGrant(c: Tx, g: Grant, actorId: string): Promise<voi
     if (!rec.rows[0] || rec.rows[0].status !== "active") throw badRequest("recipient_not_active");
     if (!rec.rows[0].certification) throw badRequest("recipient_not_certified");
   }
-  await c.query(
-    `INSERT INTO container_keys (container_id, key_version, user_id, sealed_key, permission, granted_by, signature)
-     VALUES ($1,$2,$3,$4,$5,$6,$7)
-     ON CONFLICT (container_id, key_version, user_id)
-     DO UPDATE SET sealed_key = EXCLUDED.sealed_key, permission = EXCLUDED.permission, granted_by = EXCLUDED.granted_by,
-                   signature = EXCLUDED.signature, created_at = now()`,
-    [g.containerId, g.keyVersion, g.recipientId, g.sealedKey, g.permission, g.grantedBy, g.signature]);
 }
 
 export const groupGrantSchema = z.object({
@@ -308,6 +314,8 @@ export async function containerRoutes(app: FastifyInstance, ctx: Ctx) {
       if ((await managersLeft(c, id, p.keyVersion, userId)) === 0) throw conflict("last_manager");
       const r = await c.query("DELETE FROM container_keys WHERE container_id = $1 AND user_id = $2", [id, userId]);
       if (!r.rowCount) throw notFound("member_not_found");
+      // Chi esce dal cliente perde anche la designazione d'emergenza, e quelle che aveva creato non valgono più.
+      await c.query("DELETE FROM emergency_access WHERE container_id = $1 AND (user_id = $2 OR created_by = $2)", [id, userId]);
       // Se il client non completa la rotazione, la farà il prossimo gestore.
       await c.query("UPDATE containers SET rotation_required = true WHERE id = $1", [id]);
       await audit(c, { actorId: a.id, action: "container.member_removed", targetType: "user", targetId: userId, containerId: id, ip: req.ip });
@@ -328,6 +336,8 @@ export async function containerRoutes(app: FastifyInstance, ctx: Ctx) {
       grants: z.array(grantSchema).max(1000),
       groupGrants: z.array(groupGrantSchema).max(200).default([]),
       items: z.array(z.object({ id: uuid, ikEnc: envelope })).max(100_000),
+      // Consegne d'emergenza rinnovate con la nuova chiave (quelle mancanti restano da rinnovare).
+      emergencyGrants: z.array(grantSchema).max(1000).default([]),
     }).parse(req.body);
     return tx(db, async (c) => {
       await c.query("SELECT 1 FROM containers WHERE id = $1 FOR UPDATE", [id]);
@@ -361,7 +371,8 @@ export async function containerRoutes(app: FastifyInstance, ctx: Ctx) {
       await c.query("UPDATE containers SET key_version = $2, meta_key_enc = $3, rotation_required = false, updated_at = now() WHERE id = $1", [id, body.newKeyVersion, body.metaKeyEnc]);
       await c.query("DELETE FROM container_keys WHERE container_id = $1 AND key_version < $2", [id, body.newKeyVersion]);
       await c.query("DELETE FROM container_group_keys WHERE container_id = $1 AND key_version < $2", [id, body.newKeyVersion]);
-      await audit(c, { actorId: a.id, action: "container.key_rotated", targetType: "container", targetId: id, containerId: id, ip: req.ip, details: { keyVersion: body.newKeyVersion, members: body.grants.length, groups: body.groupGrants.length, items: sent.size } });
+      const renewed = await renewEmergencyGrants(c, id, body.newKeyVersion, body.emergencyGrants, a.id);
+      await audit(c, { actorId: a.id, action: "container.key_rotated", targetType: "container", targetId: id, containerId: id, ip: req.ip, details: { keyVersion: body.newKeyVersion, members: body.grants.length, groups: body.groupGrants.length, items: sent.size, emergency: renewed } });
       return { ok: true, keyVersion: body.newKeyVersion };
     });
   });
