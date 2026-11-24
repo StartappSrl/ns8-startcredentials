@@ -230,7 +230,9 @@ export async function expireAccess(ctx: Ctx): Promise<number> {
 /** Registro e pulizia di un accesso a tempo scaduto, dentro la transazione di chi lo trova. */
 async function recordExpired(c: Tx, containerId: string, userId: string, permission: string, expiresAt: Date, ip?: string): Promise<void> {
   await c.query("DELETE FROM emergency_access WHERE container_id = $1 AND user_id = $2", [containerId, userId]);
-  await audit(c, { actorId: null, action: "container.member_expired", targetType: "user", targetId: userId, containerId, ip, details: { permission, expiresAt } });
+  await audit(c, { actorId: null, action: "container.member_expired", targetType: "user", targetId: userId, containerId, ip,
+    // Come testo: un oggetto Date verrebbe firmato diversamente da come viene riletto per la verifica della catena.
+    details: { permission, expiresAt: new Date(expiresAt).toISOString() } });
 }
 
 async function notifyExpired(ctx: Ctx, userIds: string[]): Promise<void> {
