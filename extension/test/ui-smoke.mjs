@@ -524,8 +524,10 @@ try {
   assert.ok(clientId, `cliente nell'indirizzo: ${w.location.hash}`);
   // Rapporto del cliente: CSV senza password.
   const blobs = [];
+  // Il codice dell'app gira in Node: il suo URL è quello globale, non quello di jsdom.
   const origUrl = w.URL.createObjectURL;
-  w.URL.createObjectURL = (b) => { blobs.push(b); return "blob:x"; };
+  const origNodeUrl = URL.createObjectURL;
+  w.URL.createObjectURL = URL.createObjectURL = (b) => { blobs.push(b); return "blob:x"; };
   await click("Rapporto");
   await click("Elenco elementi (CSV)");
   await waitFor(() => blobs.length === 1, "CSV del rapporto");
@@ -536,6 +538,7 @@ try {
   await waitFor(() => blobs.length === 2, "CSV del registro");
   assert.ok((await blobs[1].text()).includes("Elemento creato"), "eventi nel registro del cliente");
   w.URL.createObjectURL = origUrl;
+  URL.createObjectURL = origNodeUrl;
   await click("Chiudi");
   // Salute del singolo cliente.
   await nav(`#/salute/${clientId}`);
