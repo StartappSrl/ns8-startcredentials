@@ -60,6 +60,8 @@ export function ReportDialog({ vault, container, pathOf, onClose }: {
   const { busy, error, run } = useAction();
 
   const collect = async (withLog: boolean): Promise<ReportData> => {
+    // Il rapporto esporta nomi utente e registro: resta traccia di chi lo genera.
+    vault.report("container.report", container.id);
     setProgress("Decifratura degli elementi…");
     const all = await loadAll(vault);
     const items = all.filter((e) => e.container.id === container.id).map((e) => e.item)

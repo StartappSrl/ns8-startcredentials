@@ -1417,7 +1417,7 @@ export class Vault {
     return { ...(await generateTotp(p, now)), period: p.period };
   }
 
-  report(action: "item.reveal" | "item.copy" | "item.fill" | "item.totp_copy" | "container.export", containerId: string, itemId?: string): void {
+  report(action: "item.reveal" | "item.copy" | "item.fill" | "item.totp_copy" | "container.export" | "container.report", containerId: string, itemId?: string): void {
     this.api.post("/audit/events", { action, containerId, itemId }).catch(() => undefined);
   }
 

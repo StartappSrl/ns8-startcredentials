@@ -519,7 +519,7 @@ export async function userRoutes(app: FastifyInstance, ctx: Ctx) {
   // Eventi che avvengono solo sul client (mostra, copia, compila) vengono registrati qui.
   app.post("/api/v1/audit/events", async (req) => {
     const a = requireAuth(req);
-    const body = z.object({ action: z.enum(["item.reveal", "item.copy", "item.fill", "item.totp_copy", "container.export"]), itemId: z.string().uuid().optional(), containerId: z.string().uuid() }).parse(req.body);
+    const body = z.object({ action: z.enum(["item.reveal", "item.copy", "item.fill", "item.totp_copy", "container.export", "container.report"]), itemId: z.string().uuid().optional(), containerId: z.string().uuid() }).parse(req.body);
     const p = await permissionOf(db, body.containerId, a.id);
     const viaShare = !p && body.itemId
       ? (await db.query("SELECT 1 FROM item_shares sh JOIN items i ON i.id = sh.item_id AND sh.ik_version = i.ik_version WHERE sh.item_id = $1 AND sh.user_id = $2 AND i.container_id = $3", [body.itemId, a.id, body.containerId])).rowCount

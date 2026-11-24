@@ -334,7 +334,7 @@ export const ACTION_LABEL: Record<string, string> = {
   "user.recovery_started": "Recupero avviato", "user.recovery_completed": "Recupero completato", "org.initialized": "Organizzazione inizializzata",
   "container.created": "Cliente creato", "container.updated": "Cliente modificato", "container.deleted": "Cliente eliminato",
   "container.member_set": "Accesso concesso", "container.member_removed": "Accesso rimosso", "container.key_rotated": "Chiave ruotata",
-  "container.imported": "Import", "container.export": "Export", "folder.created": "Cartella creata", "folder.deleted": "Cartella eliminata",
+  "container.imported": "Import", "container.export": "Export", "container.report": "Rapporto del cliente generato", "folder.created": "Cartella creata", "folder.deleted": "Cartella eliminata",
   "item.created": "Elemento creato", "item.updated": "Elemento modificato", "item.deleted": "Elemento nel cestino", "item.restored": "Elemento ripristinato",
   "item.reveal": "Password mostrata", "item.copy": "Password copiata", "item.fill": "Compilazione automatica", "item.totp_copy": "OTP copiato",
   "attachment.added": "Allegato aggiunto", "attachment.deleted": "Allegato eliminato",

@@ -536,7 +536,9 @@ try {
   assert.ok(!reportCsv.includes("xk7-Qw!2mRv9#LpZ") && !reportCsv.includes("nuova-password-2026"), "nessuna password nel rapporto");
   await click("Registro accessi (CSV)");
   await waitFor(() => blobs.length === 2, "CSV del registro");
-  assert.ok((await blobs[1].text()).includes("Elemento creato"), "eventi nel registro del cliente");
+  const logCsv = await blobs[1].text();
+  assert.ok(logCsv.includes("Elemento creato"), "eventi nel registro del cliente");
+  assert.ok(logCsv.includes("Rapporto del cliente generato"), "la generazione del rapporto è registrata");
   w.URL.createObjectURL = origUrl;
   URL.createObjectURL = origNodeUrl;
   await click("Chiudi");
