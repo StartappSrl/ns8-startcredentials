@@ -1,10 +1,10 @@
 import { useMemo, useState } from "preact/hooks";
-import { Container, HealthEntry, Item, passwordHealth, Vault } from "@startcredentials/client";
+import { Container, HealthEntry, Item, passwordChangedAt, passwordHealth, Vault } from "@startcredentials/client";
 import { relTime } from "../shared";
 import { ErrorNote, useLoad } from "./kit";
 
 /** Tutti gli elementi leggibili, decifrati in locale. */
-async function loadAll(vault: Vault, withShared = false): Promise<HealthEntry[]> {
+export async function loadAll(vault: Vault, withShared = false): Promise<HealthEntry[]> {
   const out: HealthEntry[] = [];
   for (const c of await vault.containers()) {
     if (c.kind === "org") continue;
@@ -62,14 +62,32 @@ export function Search({ vault }: { vault: Vault }) {
   );
 }
 
-export function Health({ vault }: { vault: Vault }) {
+export function Health({ vault, containerId }: { vault: Vault; containerId?: string }) {
   const all = useLoad(() => loadAll(vault), []);
-  const report = useMemo(() => (all.data ? passwordHealth(all.data) : null), [all.data]);
+  const report = useMemo(() => (all.data ? passwordHealth(all.data, { containerId }) : null), [all.data, containerId]);
+  const clients = useMemo(() => {
+    const m = new Map<string, Container>();
+    for (const e of all.data ?? []) m.set(e.container.id, e.container);
+    return [...m.values()].sort((a, b) => where(a).localeCompare(where(b), "it"));
+  }, [all.data]);
+  const scope = clients.find((c) => c.id === containerId);
+  const reusedCount = report ? new Set(report.reused.flat().filter((e) => !containerId || e.container.id === containerId).map((e) => e.item.id)).size : 0;
   return (
     <>
-      <div class="stack" style="gap:4px">
-        <h1>Salute delle password</h1>
-        <p class="muted">Analisi fatta solo su questo computer, sugli elementi che puoi leggere.</p>
+      {scope && <div class="small muted"><a href="#/clienti">Clienti</a> / <a href={`#/c/${scope.id}`}>{where(scope)}</a> / Salute</div>}
+      <div class="row between">
+        <div class="stack" style="gap:4px">
+          <h1>Salute delle password{scope ? ` · ${where(scope)}` : ""}</h1>
+          <p class="muted">Analisi fatta solo su questo computer, sugli elementi che puoi leggere.</p>
+        </div>
+        {clients.length > 0 && (
+          <label class="field" style="min-width:220px">Cliente
+            <select class="input" aria-label="Cliente da analizzare" value={containerId ?? ""} onChange={(e) => { location.hash = e.currentTarget.value ? `/salute/${e.currentTarget.value}` : "/salute"; }}>
+              <option value="">Tutti i clienti</option>
+              {clients.map((c) => <option value={c.id}>{where(c)}</option>)}
+            </select>
+          </label>
+        )}
       </div>
       <ErrorNote error={all.error} />
       {!report && <p class="muted">Analisi in corso…</p>}
@@ -79,7 +97,8 @@ export function Health({ vault }: { vault: Vault }) {
             {[
               ["Password analizzate", report.checked],
               ["Deboli", report.weak.length],
-              ["Usate in più punti", report.reused.reduce((n, g) => n + g.length, 0)],
+              ["Usate in più punti", reusedCount],
+              ["Da cambiare (promemoria)", report.rotation.length],
               ["Non cambiate da oltre un anno", report.old.length],
             ].map(([l, n]) => (
               <div class="card pad"><div class="small muted">{l}</div><div class="mono" style="font-size:26px">{n}</div></div>
@@ -88,13 +107,19 @@ export function Health({ vault }: { vault: Vault }) {
           {report.reused.length > 0 && (
             <section class="stack">
               <h2>Usate in più punti</h2>
-              <p class="small muted">Se una viene compromessa, lo sono anche le altre: è il problema più urgente.</p>
+              <p class="small muted">Se una viene compromessa, lo sono anche le altre: è il problema più urgente.{containerId ? " Sono cercate anche negli altri clienti." : ""}</p>
               {report.reused.map((g) => (
                 <div class="card list">
                   <div class="group-h"><span>Stessa password in {g.length} elementi</span></div>
                   {g.map((e) => <Row {...e} />)}
                 </div>
               ))}
+            </section>
+          )}
+          {report.rotation.length > 0 && (
+            <section class="stack">
+              <h2>Da cambiare secondo il promemoria</h2>
+              <div class="card list">{report.rotation.map((e) => <Row {...e} note={`ogni ${e.item.data.rotateDays} giorni · cambiata ${relTime(passwordChangedAt(e.item))}`} />)}</div>
             </section>
           )}
           {report.weak.length > 0 && (
@@ -106,7 +131,8 @@ export function Health({ vault }: { vault: Vault }) {
           {report.old.length > 0 && (
             <section class="stack">
               <h2>Non cambiate da oltre un anno</h2>
-              <div class="card list">{report.old.map((e) => <Row {...e} note={relTime(e.item.updatedAt)} />)}</div>
+              <p class="small muted">Per gli elementi salvati prima della versione 0.7.12 conta l'ultima modifica, perché la data del cambio password non era registrata.</p>
+              <div class="card list">{report.old.map((e) => <Row {...e} note={relTime(passwordChangedAt(e.item))} />)}</div>
             </section>
           )}
           {report.missingOtp.length > 0 && (
@@ -116,9 +142,10 @@ export function Health({ vault }: { vault: Vault }) {
               <div class="card list">{report.missingOtp.map((e) => <Row {...e} />)}</div>
             </section>
           )}
-          {report.checked > 0 && !report.weak.length && !report.reused.length && !report.old.length && (
+          {report.checked > 0 && !report.weak.length && !report.reused.length && !report.old.length && !report.rotation.length && (
             <div class="notice ok">Nessun problema trovato.</div>
           )}
+          {report.checked === 0 && <p class="muted">Nessuna password da analizzare.</p>}
         </>
       )}
     </>

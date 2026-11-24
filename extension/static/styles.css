@@ -266,3 +266,13 @@ span.folder-chev { cursor: default; }
   .folders-col, .cols > .detail { position: static; max-height: none; }
   .only-narrow { display: inline-flex; }
 }
+
+/* Preferiti */
+.fav-star { flex: none; display: inline-grid; place-items: center; width: 32px; height: 32px; border: 0; border-radius: 8px; background: transparent; color: var(--muted); cursor: pointer; }
+.fav-star:hover { background: var(--sunken); color: var(--warn-ink); }
+.fav-star.on { color: #e0a100; }
+.fav-star:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.fav-mark { color: #e0a100; font-size: 14px; line-height: 1; }
+.favorites { flex: none; margin-bottom: 4px; }
+.fav-row { display: flex; align-items: center; gap: 8px; cursor: default; }
+.fav-row > a.grow:hover span:first-child { text-decoration: underline; }

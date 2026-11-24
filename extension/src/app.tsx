@@ -154,7 +154,7 @@ function Main({ vault }: { vault: Vault }) {
   }
   else if (route === "/generatore") page = <Generator />;
   else if (route === "/cerca") page = <Search vault={vault} />;
-  else if (route === "/salute") page = <Health vault={vault} />;
+  else if (route === "/salute" || route.startsWith("/salute/")) page = <Health vault={vault} containerId={route.match(/^\/salute\/([0-9a-f-]{36})$/)?.[1]} />;
   else if (route === "/import") page = <Import vault={vault} containers={list} onChanged={containers.reload} />;
   else if (route === "/impostazioni") page = <SettingsPage vault={vault} />;
   else if (route === "/admin/utenti" && vault.me.role === "admin") page = <Users vault={vault} />;

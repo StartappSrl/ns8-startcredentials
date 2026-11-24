@@ -1,10 +1,15 @@
 import { ComponentChildren } from "preact";
 import { useEffect, useMemo, useRef, useState } from "preact/hooks";
 import {
-  Container, DirectoryUser, effectiveTotpUri, Folder, generatePassword, Item, ItemData, KEEPASS_TOTP_FIELDS, Permission, serverStatus, Vault,
+  Container, DirectoryUser, effectiveTotpUri, Folder, generatePassword, Item, ItemData, KEEPASS_TOTP_FIELDS, passwordChangedAt, Permission, ROTATION_CHOICES,
+  rotationStatus, serverStatus, Vault,
 } from "@startcredentials/client";
-import { ClientsView, download, errorText, initials, loadClientsView, loadExpanded, loadVersions, lock, relTime, saveClientsView, saveExpanded, signOut, tint } from "../shared";
+import {
+  ClientsView, download, errorText, Favorite, initials, loadClientsView, loadExpanded, loadFavorites, loadVersions, lock, relTime, saveClientsView, saveExpanded,
+  saveFavorites, signOut, tint,
+} from "../shared";
 import { Brand, CopyButton, Dialog, ErrorNote, Meter, OtpCode, Secret, useAction, useLoad, useToast } from "./kit";
+import { ReportDialog } from "./report";
 
 /** Indirizzo apribile: senza protocollo si usa HTTPS; solo http/https sono ammessi. */
 export function siteUrl(u: string): string {
@@ -35,6 +40,77 @@ export function useRoute(): string {
   return r;
 }
 export const go = (path: string) => { location.hash = path; };
+
+// ------------------------------------------------------------------ preferiti
+
+export function useFavorites(vault: Vault) {
+  const [favs, setFavs] = useState<Favorite[]>([]);
+  useEffect(() => {
+    const load = () => { void loadFavorites(vault.me.id).then(setFavs); };
+    load();
+    window.addEventListener("sc-favorites", load);
+    return () => window.removeEventListener("sc-favorites", load);
+  }, [vault.me.id]);
+  const has = (itemId: string) => favs.some((f) => f.itemId === itemId);
+  const toggle = async (item: Item) => {
+    const now = await loadFavorites(vault.me.id);
+    const next = now.some((f) => f.itemId === item.id) ? now.filter((f) => f.itemId !== item.id) : [...now, { itemId: item.id, containerId: item.containerId }];
+    setFavs(next);
+    await saveFavorites(vault.me.id, next);
+  };
+  return { favs, has, toggle };
+}
+
+export function FavStar({ on, name, onToggle }: { on: boolean; name: string; onToggle: () => void }) {
+  return (
+    <button type="button" class={`fav-star${on ? " on" : ""}`} aria-pressed={on} title={on ? "Togli dai preferiti" : "Aggiungi ai preferiti"}
+      aria-label={on ? `Togli ${name} dai preferiti` : `Aggiungi ${name} ai preferiti`} onClick={(e) => { e.stopPropagation(); onToggle(); }}>
+      <svg aria-hidden="true" width="18" height="18" viewBox="0 0 24 24" fill={on ? "currentColor" : "none"} stroke="currentColor" stroke-width="2" stroke-linejoin="round">
+        <path d="M12 3l2.7 5.6 6.1.9-4.4 4.3 1 6.1L12 17l-5.4 2.9 1-6.1-4.4-4.3 6.1-.9z" />
+      </svg>
+    </button>
+  );
+}
+
+/** Password preferite in cima all'elenco clienti, con copia veloce. */
+function FavoritesSection({ vault, containers }: { vault: Vault; containers: Container[] }) {
+  const fav = useFavorites(vault);
+  const key = fav.favs.map((f) => f.itemId).join(",");
+  const rows = useLoad(async () => {
+    const byC = new Map<string, string[]>();
+    for (const f of fav.favs) byC.set(f.containerId, [...(byC.get(f.containerId) ?? []), f.itemId]);
+    const out: { item: Item; container: Container }[] = [];
+    for (const [cid, ids] of byC) {
+      const container = containers.find((c) => c.id === cid);
+      if (!container) continue;
+      const items = await vault.items(cid).catch(() => [] as Item[]);
+      for (const iid of ids) {
+        const item = items.find((i) => i.id === iid);
+        if (item) out.push({ item, container });
+      }
+    }
+    return out.sort((a, b) => a.item.data.name.localeCompare(b.item.data.name, "it"));
+  }, [key, containers.map((c) => c.id).join(",")]);
+  if (!fav.favs.length) return null;
+  return (
+    <section class="card list favorites" aria-label="Preferiti">
+      <div class="col-h"><span class="grow">Preferiti</span><span>{fav.favs.length}</span></div>
+      {!rows.data && <div class="empty small">Decifratura…</div>}
+      {rows.data?.length === 0 && <div class="empty small">I preferiti salvati non sono più disponibili.</div>}
+      {rows.data?.map(({ item, container }) => (
+        <div class="item-row fav-row">
+          <FavStar on name={item.data.name} onToggle={() => void fav.toggle(item)} />
+          <a class="grow" href={`#/c/${container.id}/i/${item.id}`} style="text-decoration:none;color:inherit;min-width:0">
+            <span class="ellipsis" style="display:block;font-weight:500">{item.data.name}</span>
+            <span class="ellipsis small muted" style="display:block">{container.kind === "personal" ? "Area personale" : container.meta.name}{item.data.username ? ` · ${item.data.username}` : ""}</span>
+          </a>
+          {item.data.username && <CopyButton value={item.data.username} label="Utente" />}
+          {item.data.password && <CopyButton value={item.data.password} label="Password" onCopied={() => vault.report("item.copy", item.containerId, item.id)} />}
+        </div>
+      ))}
+    </section>
+  );
+}
 
 // ------------------------------------------------------------------ struttura
 
@@ -158,6 +234,7 @@ export function Clients({ vault, containers, reload, shared }: { vault: Vault; c
           </div>
         </div>
       </div>
+      {!shared && !selecting && !q && <FavoritesSection vault={vault} containers={containers} />}
       {list.length === 0 ? (
         <div class="card empty">
           <h3>{q ? "Nessun cliente corrisponde alla ricerca" : shared ? "Nessun cliente condiviso con te" : "Non hai ancora clienti"}</h3>
@@ -445,6 +522,8 @@ export function ContainerView({ vault, id, focusItem, onChanged }: { vault: Vaul
   // Cartella aperta nella colonna centrale (null = elementi senza cartella) e colonna visibile sugli schermi stretti.
   const [folder, setFolder] = useState<string | null>(null);
   const [pane, setPane] = useState<"folders" | "items" | "detail">("folders");
+  const [reporting, setReporting] = useState(false);
+  const fav = useFavorites(vault);
   const bulk = useAction();
   useEffect(() => { setChecked(new Set()); }, [tab, id]);
   useEffect(() => { setFolder(null); setSelected(null); setPane("folders"); }, [id]);
@@ -577,7 +656,9 @@ export function ContainerView({ vault, id, focusItem, onChanged }: { vault: Vaul
           <span class="ellipsis" style="display:block;font-weight:500">{i.data.name}</span>
           <span class="ellipsis small muted" style="display:block">{path ? `${path} · ${sub}` : sub}</span>
         </span>
+        {rotationStatus(i)?.due && !i.deletedAt && <span class="badge warn" title={`Promemoria: cambiarla ogni ${i.data.rotateDays} giorni`}>Da cambiare</span>}
         <span class="small muted">{[effectiveTotpUri(i.data) && "OTP", i.attachments.length && `${i.attachments.length} file`].filter(Boolean).join(" · ")}</span>
+        {fav.has(i.id) && <span class="fav-mark" title="Nei preferiti" aria-label="Nei preferiti">★</span>}
       </>
     );
   };
@@ -693,6 +774,8 @@ export function ContainerView({ vault, id, focusItem, onChanged }: { vault: Vaul
           </div>
         </div>
         <div class="row">
+          {c.kind === "client" && <a class="btn" href={`#/salute/${c.id}`}>Salute</a>}
+          {c.kind === "client" && <button class="btn" onClick={() => setReporting(true)}>Rapporto</button>}
           {canManage && c.kind === "client" && <button class="btn" onClick={() => setEditMeta(true)}>Modifica cliente</button>}
           {canManage && c.kind === "client" && <button class="btn" onClick={() => setSharing(true)}>Condividi</button>}
           {canWrite && <button class="btn" onClick={() => setNewFolder(true)}>Nuova cartella</button>}
@@ -805,6 +888,11 @@ export function ContainerView({ vault, id, focusItem, onChanged }: { vault: Vaul
         </Dialog>
       )}
       {sharing && <ShareDialog vault={vault} container={c} onClose={() => { setSharing(false); reloadAll(); }} />}
+      {reporting && (
+        <Dialog title={`Rapporto · ${c.meta.name}`} onClose={() => setReporting(false)} wide>
+          <ReportDialog vault={vault} container={c} pathOf={(fid) => (fid ? folderPath(c.folders, fid) : "")} onClose={() => setReporting(false)} />
+        </Dialog>
+      )}
       {editMeta && <ContainerDialog vault={vault} container={c} onClose={() => setEditMeta(false)} onSaved={() => { setEditMeta(false); reloadAll(); }} />}
       {newFolder && <FolderDialog vault={vault} containerId={id} folders={c.folders} defaultParent={filtering ? null : cur} onClose={() => setNewFolder(false)} onSaved={() => { setNewFolder(false); info.reload(); }} />}
       {canManage && c.kind === "client" && (
@@ -891,12 +979,16 @@ export function ItemDetail({ vault, item, canWrite, canShare, folders, onEdit, o
   const { error, run } = useAction();
   const report = (a: Parameters<Vault["report"]>[0]) => vault.report(a, item.containerId, item.id);
   const folder = item.folderId ? folderPath(folders, item.folderId) : "";
+  const fav = useFavorites(vault);
+  const rot = rotationStatus(item);
   return (
     <div class="card pad stack">
-      <div>
-        <h2 style="word-break:break-word">{d.name}</h2>
-        <div class="small muted">{TYPE_LABEL[d.type]}{folder ? ` · ${folder}` : ""}</div>
-
+      <div class="row between" style="flex-wrap:nowrap;align-items:flex-start">
+        <div style="min-width:0">
+          <h2 style="word-break:break-word">{d.name}</h2>
+          <div class="small muted">{TYPE_LABEL[d.type]}{folder ? ` · ${folder}` : ""}</div>
+        </div>
+        {!item.sharedBy && !item.deletedAt && <FavStar on={fav.has(item.id)} name={d.name} onToggle={() => void fav.toggle(item)} />}
       </div>
       {item.deletedAt && <div class="notice warn">Nel cestino dal {new Date(item.deletedAt).toLocaleDateString("it-IT")}</div>}
       {(d.urls ?? []).length > 0 && (
@@ -925,6 +1017,13 @@ export function ItemDetail({ vault, item, canWrite, canShare, folders, onEdit, o
           <span class="small muted">Password</span>
           <Secret value={d.password} onReveal={() => report("item.reveal")} onCopy={() => report("item.copy")} />
           <Meter value={d.password} />
+          <span class="small muted">
+            {d.passwordChangedAt ? `Cambiata il ${new Date(d.passwordChangedAt).toLocaleDateString("it-IT")}` : `Ultima modifica dell'elemento ${relTime(passwordChangedAt(item))}`}
+            {rot && !rot.due && ` · da cambiare entro il ${rot.dueAt.toLocaleDateString("it-IT")} (promemoria ogni ${d.rotateDays} giorni)`}
+          </span>
+          {rot?.due && !item.deletedAt && (
+            <div class="notice warn">Da cambiare: il promemoria (ogni {d.rotateDays} giorni) è scaduto il {rot.dueAt.toLocaleDateString("it-IT")}.{canWrite ? " Genera una nuova password con «Modifica»." : ""}</div>
+          )}
         </div>
       )}
       {effectiveTotpUri(d) && <OtpCode uri={effectiveTotpUri(d)!} onCopy={() => report("item.totp_copy")} />}
@@ -1033,6 +1132,7 @@ function ItemEditor({ vault, containerId, folders, item, template, defaultFolder
   const source = item ?? template;
   const [folderId, setFolderId] = useState(source ? source.folderId ?? "" : defaultFolder ?? "");
   const [fields, setFields] = useState((d?.fields ?? []).map((f) => ({ ...f })).filter((f) => !legacyTotp || !KEEPASS_TOTP_FIELDS.includes(f.label)));
+  const [rotateDays, setRotateDays] = useState(d?.rotateDays ?? 0);
   const { busy, error, setError, run } = useAction();
 
   const save = (e: Event) => {
@@ -1048,6 +1148,7 @@ function ItemEditor({ vault, containerId, folders, item, template, defaultFolder
       urls: urls.split("\n").map((u) => u.trim()).filter(Boolean),
       totpUri, notes: notes || undefined,
       fields: fields.filter((f) => f.label.trim()),
+      rotateDays: password && rotateDays ? rotateDays : undefined,
     };
     run(async () => {
       if (totpUri) await Vault.totp(totpUri).catch(() => { throw new Error("Segreto OTP non valido: incolla l'URI otpauth:// o la chiave in Base32"); });
@@ -1092,6 +1193,12 @@ function ItemEditor({ vault, containerId, folders, item, template, defaultFolder
               </div>
             </label>
             <Meter value={password} />
+            <label class="field" style="max-width:320px">Promemoria cambio password
+              <select class="input" value={rotateDays} onChange={(e) => setRotateDays(Number(e.currentTarget.value))}>
+                <option value={0}>Nessuno</option>
+                {[...new Set<number>([...ROTATION_CHOICES, ...(rotateDays ? [rotateDays] : [])])].sort((a, b) => a - b).map((n) => <option value={n}>Ogni {n} giorni</option>)}
+              </select>
+            </label>
             <label class="field">Indirizzi web (uno per riga; servono per la compilazione automatica)
               <textarea class="input mono" style="min-height:64px" value={urls} onInput={(e) => setUrls(e.currentTarget.value)} placeholder="https://admin.microsoft.com" />
             </label>

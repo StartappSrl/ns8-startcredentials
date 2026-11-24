@@ -21,6 +21,20 @@ import { encryptSend, newAccessCode, SendPayload } from "./send.js";
 import { effectiveTotpUri } from "./totp-fields.js";
 import { Api, ApiError } from "./api.js";
 
+/**
+ * Data del cambio password e promemoria di rotazione sopravvivono anche agli editor che
+ * ricostruiscono i dati da zero; se la password cambia, la data si aggiorna.
+ */
+export function keepPasswordDates(prev: ItemData, next: ItemData): ItemData {
+  const out = { ...next };
+  if ((next.password ?? "") !== (prev.password ?? "")) out.passwordChangedAt = next.password ? new Date().toISOString() : undefined;
+  else if (!("passwordChangedAt" in next)) out.passwordChangedAt = prev.passwordChangedAt;
+  if (!("rotateDays" in next)) out.rotateDays = prev.rotateDays;
+  if (!out.passwordChangedAt) delete out.passwordChangedAt;
+  if (!out.rotateDays) delete out.rotateDays;
+  return out;
+}
+
 const enc = new TextEncoder();
 const dec = new TextDecoder();
 const json = (v: unknown) => enc.encode(JSON.stringify(v));
@@ -617,6 +631,7 @@ export class Vault {
   }
 
   async createItem(containerId: string, data: ItemData, folderId: string | null = null): Promise<string> {
+    if (data.password && !data.passwordChangedAt) data = { ...data, passwordChangedAt: new Date().toISOString() };
     const k = await this.key(containerId);
     const id = uuid();
     const e = encryptItem(k.ck, k.version, containerId, id, data);
@@ -635,6 +650,7 @@ export class Vault {
   }
 
   async updateItem(item: Item, data: ItemData, folderId?: string | null): Promise<number> {
+    data = keepPasswordDates(item.data, data);
     const k = await this.key(item.containerId);
     const ik = openItemKey(k.ck, item.containerId, item.id, item.ikEnc);
     try {

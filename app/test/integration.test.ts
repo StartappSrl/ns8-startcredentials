@@ -11,7 +11,7 @@ import { randomBytes } from "node:crypto";
 import type { FastifyInstance } from "fastify";
 import {
   Api, ApiError, completeRecovery, decryptExport, enableMfa, importAsClients, importBitwarden, importCsv, importInto, importStartCredentials,
-  decryptSend, login, passwordHealth, passwordPolicy, planClientImport, PolicyError, register, trustDevice, SecurityError, serverStatus, setupMfa, Vault, verifyMfa,
+  decryptSend, login, passwordHealth, passwordPolicy, rotationStatus, planClientImport, PolicyError, register, trustDevice, SecurityError, serverStatus, setupMfa, Vault, verifyMfa,
 } from "@startcredentials/client";
 import { Config, createPool, Db, migrate, pruneAudit, totpAt } from "../src/core.js";
 import { purgeExpiredSends } from "../src/routes/sends.js";
@@ -376,6 +376,25 @@ describe("StartCredentials end-to-end", () => {
     assert.ok(h.weak.some((e) => e.item.data.name === "Debole"));
     assert.ok(h.reused.some((g) => g.some((e) => e.item.data.name === "Ripetuta 1")));
     assert.ok(h.missingOtp.some((e) => e.item.data.name === "Debole"));
+
+    // Data del cambio password e promemoria di rotazione: restano anche se l'editor ricostruisce i dati.
+    const rid = await marco.createItem(target, { type: "login", name: "Rotazione", password: "Prima-Password-Lunga-1!", rotateDays: 90 });
+    let rot = (await marco.items(target)).find((i) => i.id === rid)!;
+    const firstDate = rot.data.passwordChangedAt!;
+    assert.ok(firstDate, "la data del cambio password si imposta alla creazione");
+    await marco.updateItem(rot, { type: "login", name: "Rotazione rinominata", password: "Prima-Password-Lunga-1!" });
+    rot = (await marco.items(target)).find((i) => i.id === rid)!;
+    assert.equal(rot.data.passwordChangedAt, firstDate, "senza cambiare la password la data resta");
+    assert.equal(rot.data.rotateDays, 90, "il promemoria resta");
+    assert.equal(rotationStatus(rot)!.due, false);
+    assert.equal(rotationStatus(rot, Date.now() + 91 * 86400_000)!.due, true);
+    await new Promise((r) => setTimeout(r, 5));
+    await marco.updateItem(rot, { ...rot.data, password: "Seconda-Password-Lunga-2!", rotateDays: undefined });
+    rot = (await marco.items(target)).find((i) => i.id === rid)!;
+    assert.ok(rot.data.passwordChangedAt! > firstDate, "cambiando la password la data si aggiorna");
+    assert.equal(rot.data.rotateDays, undefined, "il promemoria si può togliere");
+    const hc = passwordHealth(entries, { containerId: target });
+    assert.ok(hc.weak.every((e) => e.container.id === target));
   });
 
   test("gruppi: accesso tramite gruppo, firma verificata, uscita dal gruppo con doppia rotazione", async () => {

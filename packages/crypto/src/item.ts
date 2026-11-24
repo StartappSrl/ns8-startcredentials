@@ -17,6 +17,10 @@ export interface ItemData {
   totpUri?: string;
   notes?: string;
   fields?: { label: string; value: string; secret: boolean }[];
+  /** Ultimo cambio della password (ISO); assente sugli elementi creati prima della 0.7.12. */
+  passwordChangedAt?: string;
+  /** Promemoria: cambiare la password ogni N giorni. */
+  rotateDays?: number;
 }
 
 export interface EncryptedItem {

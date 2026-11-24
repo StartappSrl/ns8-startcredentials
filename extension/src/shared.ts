@@ -234,6 +234,23 @@ export async function saveExpanded(containerId: string, ids: string[]): Promise<
   await chrome.storage.local.set({ expanded: { ...(r.expanded ?? {}), [containerId]: ids } });
 }
 
+/**
+ * Preferiti: solo identificativi (nessun dato riservato), per utente, su questo browser.
+ * Un evento avvisa le altre viste aperte quando cambiano.
+ */
+export interface Favorite { itemId: string; containerId: string }
+
+export async function loadFavorites(userId: string): Promise<Favorite[]> {
+  const r = await chrome.storage.local.get("favorites");
+  return r.favorites?.[userId] ?? [];
+}
+
+export async function saveFavorites(userId: string, favs: Favorite[]): Promise<void> {
+  const r = await chrome.storage.local.get("favorites");
+  await chrome.storage.local.set({ favorites: { ...(r.favorites ?? {}), [userId]: favs } });
+  window.dispatchEvent(new CustomEvent("sc-favorites"));
+}
+
 export type ClientsView = "list" | "grid";
 
 /** Vista dell'elenco clienti scelta dall'utente (elenco compatto o caselle). */
@@ -309,3 +326,25 @@ export async function loadVersions(): Promise<Versions> {
   const mm = (v: string) => v.split(".").slice(0, 2).join(".");
   return { extension, server, mismatch: !!server && mm(server) !== mm(extension) };
 }
+
+/** Nomi in italiano delle azioni del registro attività. */
+export const ACTION_LABEL: Record<string, string> = {
+  "auth.login": "Accesso", "auth.login_failed": "Accesso non riuscito", "auth.mfa_enabled": "MFA attivata", "auth.mfa_failed": "Codice MFA errato",
+  "user.registered": "Registrazione", "user.invited": "Invito", "user.updated": "Utente modificato", "user.key_certified": "Chiave certificata",
+  "user.recovery_started": "Recupero avviato", "user.recovery_completed": "Recupero completato", "org.initialized": "Organizzazione inizializzata",
+  "container.created": "Cliente creato", "container.updated": "Cliente modificato", "container.deleted": "Cliente eliminato",
+  "container.member_set": "Accesso concesso", "container.member_removed": "Accesso rimosso", "container.key_rotated": "Chiave ruotata",
+  "container.imported": "Import", "container.export": "Export", "folder.created": "Cartella creata", "folder.deleted": "Cartella eliminata",
+  "item.created": "Elemento creato", "item.updated": "Elemento modificato", "item.deleted": "Elemento nel cestino", "item.restored": "Elemento ripristinato",
+  "item.reveal": "Password mostrata", "item.copy": "Password copiata", "item.fill": "Compilazione automatica", "item.totp_copy": "OTP copiato",
+  "attachment.added": "Allegato aggiunto", "attachment.deleted": "Allegato eliminato",
+  "audit.pruned": "Pulizia del registro", "item.moved": "Elemento spostato", "org.key_rotated": "Chiave dell'organizzazione ruotata",
+  "group.created": "Gruppo creato", "group.member_set": "Membro del gruppo", "group.member_removed": "Uscita dal gruppo", "group.key_rotated": "Chiave del gruppo ruotata",
+  "user.offboarded": "Uscita dall'azienda", "user.mfa_reset": "MFA reimpostata", "user.password_changed": "Master password cambiata",
+  "item.shared": "Password condivisa singolarmente", "item.unshared": "Condivisione singola tolta", "item.rekeyed": "Chiave dell'elemento rinnovata",
+  "send.created": "Invio sicuro creato", "send.opened": "Invio sicuro aperto", "send.revoked": "Invio sicuro revocato",
+  "container.group_set": "Accesso concesso a un gruppo", "container.group_removed": "Accesso tolto a un gruppo",
+  "auth.device_trusted": "Dispositivo attendibile", "auth.device_revoked": "Dispositivo revocato",
+  "auth.mfa_backup_used": "Codice di riserva MFA usato", "auth.mfa_backup_regenerated": "Codici di riserva MFA rigenerati",
+  "group.deleted": "Gruppo eliminato", "group.renamed": "Gruppo rinominato", "user.recovery_email_set": "Email di recupero impostata",
+};

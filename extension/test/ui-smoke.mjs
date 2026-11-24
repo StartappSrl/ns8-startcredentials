@@ -511,6 +511,40 @@ try {
   await waitFor(() => rows().some((r) => r.textContent.includes("Microsoft 365 – amministratore")) && rows().some((r) => r.textContent.includes("secondo tenant")), "originale e copia nell'elenco");
   step("duplicazione di una password, modificabile prima del salvataggio");
 
+  // Preferiti: stella nel dettaglio, segno nell'elenco, sezione in cima ai clienti.
+  await click("Aggiungi Microsoft 365 – secondo tenant ai preferiti");
+  await waitFor(() => rows().find((r) => r.textContent.includes("secondo tenant"))?.querySelector(".fav-mark"), "segno del preferito nell'elenco");
+  // Promemoria di rotazione: si imposta nell'editor e si vede nel dettaglio con la data del cambio password.
+  await click("Modifica");
+  type("Promemoria cambio password", "30");
+  await click("Salva");
+  await waitFor(() => w.document.querySelector(".detail")?.textContent.includes("promemoria ogni 30 giorni"), "promemoria nel dettaglio");
+  assert.ok(w.document.querySelector(".detail").textContent.includes("Cambiata il "), "data del cambio password");
+  const clientId = w.location.hash.match(/^#\/c\/([0-9a-f-]{36})/)?.[1];
+  assert.ok(clientId, `cliente nell'indirizzo: ${w.location.hash}`);
+  // Rapporto del cliente: CSV senza password.
+  const blobs = [];
+  const origUrl = w.URL.createObjectURL;
+  w.URL.createObjectURL = (b) => { blobs.push(b); return "blob:x"; };
+  await click("Rapporto");
+  await click("Elenco elementi (CSV)");
+  await waitFor(() => blobs.length === 1, "CSV del rapporto");
+  const reportCsv = await blobs[0].text();
+  assert.ok(reportCsv.includes("secondo tenant") && reportCsv.includes("ogni 30 giorni"), reportCsv.slice(0, 400));
+  assert.ok(!reportCsv.includes("xk7-Qw!2mRv9#LpZ") && !reportCsv.includes("nuova-password-2026"), "nessuna password nel rapporto");
+  await click("Registro accessi (CSV)");
+  await waitFor(() => blobs.length === 2, "CSV del registro");
+  assert.ok((await blobs[1].text()).includes("Elemento creato"), "eventi nel registro del cliente");
+  w.URL.createObjectURL = origUrl;
+  await click("Chiudi");
+  // Salute del singolo cliente.
+  await nav(`#/salute/${clientId}`);
+  await waitText("Salute delle password · ");
+  await waitText("Password analizzate");
+  await nav("#/clienti");
+  await waitFor(() => w.document.querySelector(".favorites")?.textContent.includes("secondo tenant"), "preferito in cima ai clienti");
+  step("preferiti, promemoria di rotazione, rapporto del cliente e salute per cliente");
+
   // Più clienti insieme: condivisione con un gruppo e revoca.
   await nav("#/clienti");
   await waitFor(() => [...w.document.querySelectorAll(".client")].length >= 2, "elenco dei clienti");

@@ -2,7 +2,7 @@ import { useState } from "preact/hooks";
 import {
   ApiError, ClientImportSummary, Container, effectiveTotpUri, generatePassword, import1Password, importAsClients, importBitwarden, importCsv, importInto, importKeePass, ImportResult, importStartCredentials, passwordPolicy, planClientImport, Vault,
 } from "@startcredentials/client";
-import { disableInlineIcon, download, enableInlineIcon, getSettings, initials, loadVersions, lock, saveSettings, signOut, storeVault } from "../shared";
+import { ACTION_LABEL, disableInlineIcon, download, enableInlineIcon, getSettings, initials, loadVersions, lock, saveSettings, signOut, storeVault } from "../shared";
 import { BackupCodes } from "./auth";
 import { CopyButton, Dialog, ErrorNote, Meter, useAction, useLoad, useToast } from "./kit";
 import { go } from "./vault";
@@ -344,20 +344,6 @@ export function Org({ vault, onChanged }: { vault: Vault; onChanged: () => void 
 
 // ------------------------------------------------------------------ registro attività
 
-const ACTION_LABEL: Record<string, string> = {
-  "auth.login": "Accesso", "auth.login_failed": "Accesso non riuscito", "auth.mfa_enabled": "MFA attivata", "auth.mfa_failed": "Codice MFA errato",
-  "user.registered": "Registrazione", "user.invited": "Invito", "user.updated": "Utente modificato", "user.key_certified": "Chiave certificata",
-  "user.recovery_started": "Recupero avviato", "user.recovery_completed": "Recupero completato", "org.initialized": "Organizzazione inizializzata",
-  "container.created": "Cliente creato", "container.updated": "Cliente modificato", "container.deleted": "Cliente eliminato",
-  "container.member_set": "Accesso concesso", "container.member_removed": "Accesso rimosso", "container.key_rotated": "Chiave ruotata",
-  "container.imported": "Import", "container.export": "Export", "folder.created": "Cartella creata", "folder.deleted": "Cartella eliminata",
-  "item.created": "Elemento creato", "item.updated": "Elemento modificato", "item.deleted": "Elemento nel cestino", "item.restored": "Elemento ripristinato",
-  "item.reveal": "Password mostrata", "item.copy": "Password copiata", "item.fill": "Compilazione automatica", "item.totp_copy": "OTP copiato",
-  "attachment.added": "Allegato aggiunto", "attachment.deleted": "Allegato eliminato",
-  "audit.pruned": "Pulizia del registro", "item.moved": "Elemento spostato", "org.key_rotated": "Chiave dell'organizzazione ruotata",
-  "group.created": "Gruppo creato", "group.member_set": "Membro del gruppo", "group.member_removed": "Uscita dal gruppo", "group.key_rotated": "Chiave del gruppo ruotata",
-  "user.offboarded": "Uscita dall'azienda", "user.mfa_reset": "MFA reimpostata", "user.password_changed": "Master password cambiata",
-};
 
 export function Audit({ vault, containers }: { vault: Vault; containers: Container[] }) {
   const [containerId, setContainerId] = useState("");
