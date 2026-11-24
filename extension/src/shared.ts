@@ -248,7 +248,7 @@ export async function loadFavorites(userId: string): Promise<Favorite[]> {
 export async function saveFavorites(userId: string, favs: Favorite[]): Promise<void> {
   const r = await chrome.storage.local.get("favorites");
   await chrome.storage.local.set({ favorites: { ...(r.favorites ?? {}), [userId]: favs } });
-  window.dispatchEvent(new CustomEvent("sc-favorites"));
+  window.dispatchEvent(new window.CustomEvent("sc-favorites"));
 }
 
 export type ClientsView = "list" | "grid";
