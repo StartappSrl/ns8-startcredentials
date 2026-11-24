@@ -1,6 +1,6 @@
 {
   "name": "@startcredentials/extension",
-  "version": "0.7.14",
+  "version": "0.7.15",
   "private": true,
   "license": "GPL-3.0-or-later",
   "type": "module",
@@ -12,12 +12,13 @@
     "test:inline": "node test/inline.mjs",
     "test:popup": "node test/popup-smoke.mjs",
     "test:site": "node test/site.mjs",
-    "test:send": "node test/send-page.mjs"
+    "test:send": "node test/send-page.mjs",
+    "test:breach": "esbuild src/breach.ts --bundle --platform=node --format=esm --outfile=test-build/breach.mjs --log-level=warning && node test/breach.mjs"
   },
   "dependencies": {
     "@fontsource/jetbrains-mono": "5.1.1",
     "@fontsource/plus-jakarta-sans": "5.1.1",
-    "@startcredentials/client": "0.7.14",
+    "@startcredentials/client": "0.7.15",
     "preact": "10.25.4",
     "qrcode-generator": "1.4.4"
   },

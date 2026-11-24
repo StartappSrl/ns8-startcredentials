@@ -93,7 +93,7 @@ async function activate(c: Tx, r: Row): Promise<void> {
     throw conflict("emergency_stale", "La designazione va rinnovata da un gestore: la firma non è più valida");
   }
   const RANK = { read: 1, write: 2, manage: 3 } as const;
-  const existing = await c.query("SELECT permission FROM container_keys WHERE container_id = $1 AND key_version = $2 AND user_id = $3",
+  const existing = await c.query("SELECT permission FROM container_keys WHERE container_id = $1 AND key_version = $2 AND user_id = $3 AND (expires_at IS NULL OR expires_at > now())",
     [r.container_id, r.key_version, r.user_id]);
   const cur = existing.rows[0]?.permission as keyof typeof RANK | undefined;
   if (!cur || RANK[cur] < RANK[g.permission]) {
@@ -102,7 +102,7 @@ async function activate(c: Tx, r: Row): Promise<void> {
        VALUES ($1,$2,$3,$4,$5,$6,$7)
        ON CONFLICT (container_id, key_version, user_id)
        DO UPDATE SET sealed_key = EXCLUDED.sealed_key, permission = EXCLUDED.permission, granted_by = EXCLUDED.granted_by,
-                     signature = EXCLUDED.signature, created_at = now()`,
+                     signature = EXCLUDED.signature, created_at = now(), expires_at = NULL`,
       [g.containerId, g.keyVersion, g.recipientId, g.sealedKey, g.permission, g.grantedBy, g.signature]);
   }
   await c.query("DELETE FROM emergency_access WHERE id = $1", [r.id]);

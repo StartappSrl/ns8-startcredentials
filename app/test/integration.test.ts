@@ -15,6 +15,7 @@ import {
 } from "@startcredentials/client";
 import { Config, createPool, Db, migrate, pruneAudit, totpAt } from "../src/core.js";
 import { purgeExpiredSends } from "../src/routes/sends.js";
+import { expireAccess } from "../src/routes/containers.js";
 import { APP_ROOT, buildApp } from "../src/server.js";
 
 process.env.NODE_ENV = "test";
@@ -735,6 +736,63 @@ describe("StartCredentials end-to-end", () => {
     await marco.revoke(cid2, state.saraId);
     assert.equal((await marco.emergencyDesignations(cid2)).length, 0);
     assert.ok(!(await sara.myEmergencyAccess()).some((e) => e.containerId === cid2));
+  });
+
+  test("accessi a tempo: scadenza conservata alla rotazione, accesso tolto alla scadenza, chiave da ruotare", async () => {
+    const marco: Vault = state.marco;
+    const sara: Vault = state.sara;
+    await sara.refreshMe();
+    const cid = await marco.createContainer({ name: "Cliente a tempo" });
+    const in3days = new Date(Date.now() + 3 * 86400_000).toISOString();
+    await rejects(marco.share(cid, state.saraId, "manage", { expiresAt: in3days }), "manage_cannot_expire");
+    await rejects(marco.share(cid, state.saraId, "read", { expiresAt: new Date(Date.now() - 1000).toISOString() }), "invalid_expiry");
+    await marco.share(cid, state.saraId, "read", { expiresAt: in3days });
+    const exp = () => marco.members(cid).then((m) => m.find((x) => x.userId === state.saraId)?.expiresAt ?? null);
+    assert.equal(new Date((await exp())!).getTime(), new Date(in3days).getTime());
+    assert.ok((await sara.containers()).some((c) => c.id === cid));
+    // Cambiare il permesso non toglie la scadenza; la rotazione la conserva.
+    await marco.share(cid, state.saraId, "write");
+    assert.ok(await exp());
+    await marco.rotate(cid);
+    assert.ok(await exp(), "la scadenza resta dopo la rotazione");
+    // Scaduta: niente accesso subito, anche prima della pulizia periodica.
+    await db.query("UPDATE container_keys SET expires_at = now() - interval '1 minute' WHERE container_id = $1 AND user_id = $2", [cid, state.saraId]);
+    assert.ok(!(await sara.containers()).some((c) => c.id === cid));
+    await assert.rejects(sara.items(cid));
+    assert.ok(!(await marco.members(cid)).some((m) => m.userId === state.saraId), "non risulta più tra i membri");
+    // Pulizia: accesso eliminato, chiave da ruotare, avviso all'interessato, evento nel registro.
+    sentMail.length = 0;
+    const n = await expireAccess({ db, cfg, mailer: { enabled: true, send: async (to: string, subject: string, text: string) => { sentMail.push({ to, subject, text }); return true; } } } as never);
+    assert.equal(n, 1);
+    assert.ok(sentMail.some((m) => m.to === "sara@azienda.it" && /scaduto/.test(m.text) && !m.text.includes("Cliente a tempo")));
+    assert.ok((await marco.containers()).find((c) => c.id === cid)!.rotationRequired);
+    assert.ok((await marco.auditLog({ containerId: cid })).some((l) => l.action === "container.member_expired"));
+    const done = await marco.completePendingRotations();
+    assert.ok(done.done.includes("Cliente a tempo"));
+    // Togliere la scadenza.
+    await marco.share(cid, state.saraId, "read", { expiresAt: in3days });
+    await marco.share(cid, state.saraId, "read", { expiresAt: null });
+    assert.equal(await exp(), null);
+  });
+
+  test("avvisi email: tentativi di accesso falliti, codice MFA errato, export e raffica di rapporti", async () => {
+    const marco: Vault = state.marco;
+    sentMail.length = 0;
+    for (let i = 0; i < 6; i++) await assert.rejects(login(api(), "sara@azienda.it", "password sbagliata"));
+    const failed = sentMail.filter((m) => m.to === "sara@azienda.it" && m.subject === "Tentativi di accesso non riusciti");
+    assert.equal(failed.length, 1, "un solo avviso per raffica");
+    assert.ok(!failed[0]!.text.includes("password sbagliata"));
+    // Export e rapporti: avvisati gli altri amministratori.
+    await marco.setUser(state.saraId, { role: "admin" });
+    const cid = await marco.createContainer({ name: "Cliente esportato" });
+    sentMail.length = 0;
+    await marco.api.post("/audit/events", { action: "container.export", containerId: cid });
+    await marco.api.post("/audit/events", { action: "container.export", containerId: cid });
+    assert.equal(sentMail.filter((m) => m.to === "sara@azienda.it" && m.subject === "Export dei dati su StartCredentials").length, 1);
+    for (let i = 0; i < 6; i++) await marco.api.post("/audit/events", { action: "container.report", containerId: cid });
+    assert.equal(sentMail.filter((m) => m.to === "sara@azienda.it" && m.subject === "Molti rapporti generati su StartCredentials").length, 1);
+    assert.ok(sentMail.every((m) => !m.text.includes("Cliente esportato")), "niente nomi dei clienti nelle email");
+    await marco.setUser(state.saraId, { role: "user" });
   });
 
   test("notifiche email: nuovo accesso a un cliente e ingresso in un gruppo, senza nomi dei clienti", async () => {

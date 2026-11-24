@@ -1,7 +1,8 @@
 import { useMemo, useState } from "preact/hooks";
 import { Container, HealthEntry, Item, passwordChangedAt, passwordHealth, Vault } from "@startcredentials/client";
 import { relTime } from "../shared";
-import { ErrorNote, useLoad } from "./kit";
+import { ErrorNote, useAction, useLoad } from "./kit";
+import { pwnedCounts } from "../breach";
 
 /** Tutti gli elementi leggibili, decifrati in locale. */
 export async function loadAll(vault: Vault, withShared = false): Promise<HealthEntry[]> {
@@ -62,6 +63,53 @@ export function Search({ vault }: { vault: Vault }) {
   );
 }
 
+/** Risultati del controllo violazioni, solo in memoria e solo per questa sessione. */
+const breachCache = new Map<string, number>();
+
+/**
+ * Controllo delle password comparse in violazioni note. Parte solo su richiesta,
+ * perché contatta un servizio esterno (che riceve solo l'inizio dell'impronta).
+ */
+function BreachCheck({ entries }: { entries: HealthEntry[] }) {
+  const withPw = entries.filter((e) => e.item.data.password && !e.item.deletedAt);
+  const [, setTick] = useState(0);
+  const [progress, setProgress] = useState<string | null>(null);
+  const { busy, error, run } = useAction();
+  const checked = withPw.filter((e) => breachCache.has(e.item.data.password!));
+  const found = checked.filter((e) => (breachCache.get(e.item.data.password!) ?? 0) > 0)
+    .sort((a, b) => (breachCache.get(b.item.data.password!) ?? 0) - (breachCache.get(a.item.data.password!) ?? 0));
+  const allChecked = withPw.length > 0 && checked.length === withPw.length;
+  const start = () => run(async () => {
+    const todo = withPw.map((e) => e.item.data.password!).filter((p) => !breachCache.has(p));
+    const r = await pwnedCounts(todo, { onProgress: (d, t) => setProgress(`Controllo ${d} di ${t}…`) });
+    for (const [pw, n] of r) breachCache.set(pw, n);
+    setTick((x) => x + 1);
+  }).finally(() => setProgress(null));
+  if (!withPw.length) return null;
+  return (
+    <section class="stack">
+      <h2>Comparse in violazioni note</h2>
+      <p class="small muted">
+        Confronta le password con l'archivio pubblico delle password trapelate (Have I Been Pwned). Dal computer esce solo l'inizio
+        dell'impronta di ogni password, mai la password: il confronto avviene qui.
+      </p>
+      {!allChecked && (
+        <button class="btn" style="align-self:flex-start" disabled={busy} onClick={start}>
+          {busy ? (progress ?? "Controllo…") : `Controlla ${withPw.length - checked.length} password online`}
+        </button>
+      )}
+      <ErrorNote error={error} />
+      {allChecked && found.length === 0 && <div class="notice ok">Nessuna password compare nelle violazioni note.</div>}
+      {found.length > 0 && (
+        <>
+          <p class="small">Una password che compare in una violazione è nelle liste usate per indovinare le password: <b>va cambiata</b>, anche se è lunga.</p>
+          <div class="card list">{found.map((e) => <Row {...e} note={`trovata ${breachCache.get(e.item.data.password!)!.toLocaleString("it-IT")} volte`} />)}</div>
+        </>
+      )}
+    </section>
+  );
+}
+
 export function Health({ vault, containerId }: { vault: Vault; containerId?: string }) {
   const all = useLoad(() => loadAll(vault), []);
   const report = useMemo(() => (all.data ? passwordHealth(all.data, { containerId }) : null), [all.data, containerId]);
@@ -104,6 +152,7 @@ export function Health({ vault, containerId }: { vault: Vault; containerId?: str
               <div class="card pad"><div class="small muted">{l}</div><div class="mono" style="font-size:26px">{n}</div></div>
             ))}
           </div>
+          <BreachCheck entries={(all.data ?? []).filter((e) => !containerId || e.container.id === containerId)} />
           {report.reused.length > 0 && (
             <section class="stack">
               <h2>Usate in più punti</h2>

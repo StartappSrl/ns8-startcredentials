@@ -28,7 +28,7 @@ export async function permissionOf(db: Db | Tx, containerId: string, userId: str
   const r = await db.query(
     `SELECT c.key_version, c.kind, a.permission FROM containers c
        JOIN (
-         SELECT k.container_id, k.key_version, k.permission FROM container_keys k WHERE k.user_id = $2
+         SELECT k.container_id, k.key_version, k.permission FROM container_keys k WHERE k.user_id = $2 AND (k.expires_at IS NULL OR k.expires_at > now())
          UNION ALL
          SELECT gk.container_id, gk.key_version, gk.permission FROM container_group_keys gk
            JOIN groups g ON g.id = gk.group_id AND g.deleted_at IS NULL AND gk.group_key_version = g.key_version
@@ -42,7 +42,7 @@ export async function permissionOf(db: Db | Tx, containerId: string, userId: str
 
 /** Contenitori accessibili all'utente (direttamente o tramite gruppo), come sottoquery SQL con $1 = utente. */
 export const ACCESSIBLE_CONTAINERS = `
-  SELECT k.container_id FROM container_keys k JOIN containers c ON c.id = k.container_id AND c.key_version = k.key_version WHERE k.user_id = $1
+  SELECT k.container_id FROM container_keys k JOIN containers c ON c.id = k.container_id AND c.key_version = k.key_version WHERE k.user_id = $1 AND (k.expires_at IS NULL OR k.expires_at > now())
   UNION
   SELECT gk.container_id FROM container_group_keys gk
     JOIN containers c ON c.id = gk.container_id AND c.key_version = gk.key_version
@@ -138,7 +138,7 @@ async function managersLeft(c: Tx, containerId: string, keyVersion: number, excl
 export async function loadContainers(db: Db | Tx, userId: string, onlyId?: string) {
   const base = await db.query(
     `SELECT c.id, c.kind, c.meta_key_enc, c.meta_enc, c.key_version, c.updated_at, c.rotation_required,
-            (SELECT count(*)::int FROM container_keys m WHERE m.container_id = c.id AND m.key_version = c.key_version) AS members,
+            (SELECT count(*)::int FROM container_keys m WHERE m.container_id = c.id AND m.key_version = c.key_version AND (m.expires_at IS NULL OR m.expires_at > now())) AS members,
             (SELECT count(*)::int FROM container_group_keys m WHERE m.container_id = c.id AND m.key_version = c.key_version) AS groups,
             (SELECT count(*)::int FROM items i WHERE i.container_id = c.id AND i.deleted_at IS NULL) AS items,
             (SELECT count(*)::int FROM items i WHERE i.container_id = c.id AND i.deleted_at IS NULL AND i.type = 'totp') AS totp_items
@@ -151,7 +151,7 @@ export async function loadContainers(db: Db | Tx, userId: string, onlyId?: strin
     `SELECT k.*, gk.sign_public AS grantor_sign_public FROM container_keys k
        JOIN containers c ON c.id = k.container_id AND c.key_version = k.key_version
        JOIN users gu ON gu.id = k.granted_by JOIN user_keys gk ON gk.user_id = gu.id AND gk.version = gu.key_version
-      WHERE k.user_id = $1 AND k.container_id = ANY($2::uuid[])`, [userId, ids]);
+      WHERE k.user_id = $1 AND k.container_id = ANY($2::uuid[]) AND (k.expires_at IS NULL OR k.expires_at > now())`, [userId, ids]);
   const viaGroup = await db.query(
     `SELECT gk.*, g.name AS group_name, g.box_public, g.certification, gm.role, gm.sealed_key AS member_sealed_key,
             gm.granted_by AS member_granted_by, gm.signature AS member_signature
@@ -205,8 +205,40 @@ async function notifyShare(ctx: Ctx, actorId: string, recipientId: string, permi
     `Per sicurezza il nome del cliente non viene scritto nelle email: lo trovi nell'estensione, nella sezione «Condivisi con me».\n\n${ctx.cfg.publicUrl}\n`);
 }
 
+/**
+ * Toglie gli accessi a tempo scaduti: niente più accesso dal server e chiave del
+ * cliente da ruotare (la completa il primo gestore che apre la cassaforte).
+ */
+export async function expireAccess(ctx: Ctx): Promise<number> {
+  const expired = await tx(ctx.db, async (c) => {
+    const r = await c.query(
+      `DELETE FROM container_keys k USING containers ct
+        WHERE k.container_id = ct.id AND k.expires_at IS NOT NULL AND k.expires_at <= now()
+        RETURNING k.container_id, k.user_id, k.permission, k.expires_at, (k.key_version = ct.key_version) AS current`);
+    const rows = r.rows.filter((x) => x.current);
+    for (const x of rows) {
+      await c.query("UPDATE containers SET rotation_required = true WHERE id = $1", [x.container_id]);
+      await audit(c, { actorId: null, action: "container.member_expired", targetType: "user", targetId: x.user_id, containerId: x.container_id,
+        details: { permission: x.permission, expiresAt: x.expires_at } });
+    }
+    return rows;
+  });
+  for (const x of expired) {
+    const u = await ctx.db.query("SELECT email FROM users WHERE id = $1 AND status = 'active'", [x.user_id]);
+    if (u.rows[0]) {
+      await ctx.mailer.send(u.rows[0].email, "Accesso scaduto su StartCredentials",
+        `Il tuo accesso a tempo a un cliente su StartCredentials è scaduto ed è stato tolto.\n\n` +
+        `Se ti serve ancora, chiedilo a un gestore del cliente.\n\n${ctx.cfg.publicUrl}\n`);
+    }
+  }
+  return expired.length;
+}
+
 export async function containerRoutes(app: FastifyInstance, ctx: Ctx) {
   const { db } = ctx;
+  const expiryTimer = setInterval(() => { expireAccess(ctx).catch((e) => app.log.error(e)); }, 5 * 60_000);
+  expiryTimer.unref();
+  app.addHook("onClose", async () => clearInterval(expiryTimer));
 
   app.get("/api/v1/containers", async (req) => {
     const a = requireAuth(req);
@@ -274,16 +306,29 @@ export async function containerRoutes(app: FastifyInstance, ctx: Ctx) {
     const { id } = z.object({ id: uuid }).parse(req.params);
     const p = await requirePermission(db, id, a.id, "read");
     const r = await db.query(
-      `SELECT k.user_id, u.display_name, u.email, k.permission, k.granted_by, k.created_at
+      `SELECT k.user_id, u.display_name, u.email, k.permission, k.granted_by, k.created_at, k.expires_at
          FROM container_keys k JOIN users u ON u.id = k.user_id
-        WHERE k.container_id = $1 AND k.key_version = $2 ORDER BY u.display_name`, [id, p.keyVersion]);
-    return r.rows.map((m) => ({ userId: m.user_id, displayName: m.display_name, email: m.email, permission: m.permission, grantedBy: m.granted_by, since: m.created_at }));
+        WHERE k.container_id = $1 AND k.key_version = $2 AND (k.expires_at IS NULL OR k.expires_at > now()) ORDER BY u.display_name`, [id, p.keyVersion]);
+    return r.rows.map((m) => ({
+      userId: m.user_id, displayName: m.display_name, email: m.email, permission: m.permission, grantedBy: m.granted_by, since: m.created_at,
+      expiresAt: m.expires_at,
+    }));
   });
 
   app.put("/api/v1/containers/:id/members", async (req) => {
     const a = requireAuth(req);
     const { id } = z.object({ id: uuid }).parse(req.params);
-    const { grant } = z.object({ grant: grantSchema }).parse(req.body);
+    const { grant, expiresAt } = z.object({
+      grant: grantSchema,
+      // Assente: la scadenza resta com'è. null: nessuna scadenza.
+      expiresAt: z.string().datetime().nullable().optional(),
+    }).parse(req.body);
+    if (expiresAt) {
+      const t = new Date(expiresAt).getTime();
+      if (t <= Date.now() + 60_000 || t > Date.now() + 2 * 366 * 86400_000) throw badRequest("invalid_expiry", "La scadenza deve essere tra adesso e due anni");
+      if (grant.permission === "manage") throw badRequest("manage_cannot_expire", "Chi gestisce il cliente non può avere un accesso a tempo");
+      if (grant.recipientId === requireAuth(req).id) throw badRequest("cannot_expire_self");
+    }
     return tx(db, async (c) => {
       await c.query("SELECT 1 FROM containers WHERE id = $1 FOR UPDATE", [id]);
       const p = await requirePermission(c, id, a.id, "manage");
@@ -297,7 +342,13 @@ export async function containerRoutes(app: FastifyInstance, ctx: Ctx) {
       if (grant.permission !== "manage" && (await managersLeft(c, id, p.keyVersion, grant.recipientId)) === 0) throw conflict("last_manager");
       const existed = await c.query("SELECT 1 FROM container_keys WHERE container_id = $1 AND key_version = $2 AND user_id = $3", [id, p.keyVersion, grant.recipientId]);
       await insertGrant(c, grant, a.id);
-      await audit(c, { actorId: a.id, action: "container.member_set", targetType: "user", targetId: grant.recipientId, containerId: id, ip: req.ip, details: { permission: grant.permission } });
+      // Un gestore non ha mai una scadenza (il cliente deve restare gestibile).
+      if (grant.permission === "manage" || expiresAt !== undefined) {
+        await c.query("UPDATE container_keys SET expires_at = $4 WHERE container_id = $1 AND key_version = $2 AND user_id = $3",
+          [id, p.keyVersion, grant.recipientId, grant.permission === "manage" ? null : expiresAt]);
+      }
+      await audit(c, { actorId: a.id, action: "container.member_set", targetType: "user", targetId: grant.recipientId, containerId: id, ip: req.ip,
+        details: { permission: grant.permission, ...(expiresAt !== undefined && grant.permission !== "manage" ? { expiresAt } : {}) } });
       return { ok: true, notify: !existed.rowCount && grant.recipientId !== a.id && p.kind === "client" };
     }).then(async (r) => {
       if (r.notify) await notifyShare(ctx, a.id, grant.recipientId, grant.permission);
@@ -343,7 +394,7 @@ export async function containerRoutes(app: FastifyInstance, ctx: Ctx) {
       await c.query("SELECT 1 FROM containers WHERE id = $1 FOR UPDATE", [id]);
       const p = await requirePermission(c, id, a.id, "manage");
       if (body.newKeyVersion !== p.keyVersion + 1) throw conflict("stale_key_version");
-      const members = await c.query("SELECT user_id, permission FROM container_keys WHERE container_id = $1 AND key_version = $2", [id, p.keyVersion]);
+      const members = await c.query("SELECT user_id, permission FROM container_keys k WHERE k.container_id = $1 AND k.key_version = $2 AND (k.expires_at IS NULL OR k.expires_at > now())", [id, p.keyVersion]);
       const expected = new Map(members.rows.map((m) => [m.user_id as string, m.permission as string]));
       if (body.grants.length !== expected.size) throw badRequest("grants_must_match_members");
       for (const g of body.grants) {
@@ -369,6 +420,11 @@ export async function containerRoutes(app: FastifyInstance, ctx: Ctx) {
         await c.query("UPDATE items SET ik_enc = $3, ik_key_version = $4 WHERE id = $1 AND container_id = $2", [itemId, id, ikEnc, body.newKeyVersion]);
       }
       await c.query("UPDATE containers SET key_version = $2, meta_key_enc = $3, rotation_required = false, updated_at = now() WHERE id = $1", [id, body.newKeyVersion, body.metaKeyEnc]);
+      // Gli accessi a tempo mantengono la loro scadenza anche con la nuova chiave.
+      await c.query(
+        `UPDATE container_keys n SET expires_at = o.expires_at FROM container_keys o
+          WHERE n.container_id = $1 AND n.key_version = $2 AND o.container_id = $1 AND o.key_version = $3 AND o.user_id = n.user_id`,
+        [id, body.newKeyVersion, p.keyVersion]);
       await c.query("DELETE FROM container_keys WHERE container_id = $1 AND key_version < $2", [id, body.newKeyVersion]);
       await c.query("DELETE FROM container_group_keys WHERE container_id = $1 AND key_version < $2", [id, body.newKeyVersion]);
       const renewed = await renewEmergencyGrants(c, id, body.newKeyVersion, body.emergencyGrants, a.id);

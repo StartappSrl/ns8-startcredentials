@@ -518,6 +518,32 @@ export async function userRoutes(app: FastifyInstance, ctx: Ctx) {
     return verifyAuditChain(db);
   });
 
+  /**
+   * Avvisi agli amministratori: ogni export cifrato (porta fuori tutti i clienti
+   * leggibili) e raffiche di rapporti (5 in un'ora dalla stessa persona).
+   */
+  async function alertExport(userId: string, action: "container.export" | "container.report", ip: string) {
+    try {
+      if (action === "container.report") {
+        const r = await db.query("SELECT count(*)::int AS n FROM audit_log WHERE actor_id = $1 AND action = 'container.report' AND at > now() - interval '1 hour'", [userId]);
+        if (r.rows[0].n !== 5) return;
+      } else {
+        // Un export registra un evento per ogni contenitore: si avvisa una volta ogni 10 minuti.
+        const r = await db.query("SELECT count(*)::int AS n FROM audit_log WHERE actor_id = $1 AND action = 'container.export' AND at > now() - interval '10 minutes'", [userId]);
+        if (r.rows[0].n !== 1) return;
+      }
+      const who = (await db.query("SELECT display_name, email FROM users WHERE id = $1", [userId])).rows[0];
+      const admins = await db.query("SELECT email FROM users WHERE role = 'admin' AND status = 'active' AND id <> $1", [userId]);
+      const subject = action === "container.export" ? "Export dei dati su StartCredentials" : "Molti rapporti generati su StartCredentials";
+      const text = action === "container.export"
+        ? `${who.display_name} (${who.email}) ha appena fatto un export cifrato dei clienti a cui ha accesso, dall'indirizzo ${ip}.\n\nSe non era previsto, verificalo nel registro attività.\n\n${ctx.cfg.publicUrl}\n`
+        : `${who.display_name} (${who.email}) ha generato 5 rapporti di clienti nell'ultima ora, dall'indirizzo ${ip}.\n\nSe non era previsto, verificalo nel registro attività.\n\n${ctx.cfg.publicUrl}\n`;
+      for (const adm of admins.rows) await ctx.mailer.send(adm.email, subject, text);
+    } catch {
+      // Gli avvisi non devono mai bloccare l'operazione.
+    }
+  }
+
   // Eventi che avvengono solo sul client (mostra, copia, compila) vengono registrati qui.
   app.post("/api/v1/audit/events", async (req) => {
     const a = requireAuth(req);
@@ -532,6 +558,7 @@ export async function userRoutes(app: FastifyInstance, ctx: Ctx) {
       if (!it.rowCount) throw notFound();
     }
     await tx(db, (c) => audit(c, { actorId: a.id, action: body.action, targetType: body.itemId ? "item" : "container", targetId: body.itemId ?? body.containerId, containerId: body.containerId, ip: req.ip }));
+    if (body.action === "container.export" || body.action === "container.report") await alertExport(a.id, body.action, req.ip);
     return { ok: true };
   });
 }

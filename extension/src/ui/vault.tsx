@@ -1238,11 +1238,21 @@ function ItemEditor({ vault, containerId, folders, item, template, defaultFolder
 
 // ------------------------------------------------------------------ condivisione
 
+/** Data per <input type="date"> (giorno locale), a `days` giorni da `from`. */
+function dayInput(days: number, from = new Date()): string {
+  const d = new Date(from.getTime() + days * 86400_000);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+}
+/** Fine del giorno scelto, ora locale. */
+const endOfDay = (day: string) => new Date(`${day}T23:59:00`).toISOString();
+
 function ShareDialog({ vault, container, onClose }: { vault: Vault; container: Container; onClose: () => void }) {
   const members = useLoad(() => vault.members(container.id), [container.id]);
   const dir = useLoad(() => vault.directory(true), []);
   const [pick, setPick] = useState("");
   const [perm, setPerm] = useState<Permission>("read");
+  // Accesso a tempo: data di scadenza (fine giornata), solo per lettura e modifica.
+  const [until, setUntil] = useState("");
   const [confirmRevoke, setConfirmRevoke] = useState<string | null>(null);
   const { busy, error, run } = useAction();
   const toast = useToast();
@@ -1262,9 +1272,15 @@ function ShareDialog({ vault, container, onClose }: { vault: Vault; container: C
             {(["read", "write", "manage"] as const).map((p) => <option value={p}>{PERM_LABEL[p]}</option>)}
           </select>
         </label>
+        {perm !== "manage" && (
+          <label class="field">Scade il (facoltativo)
+            <input class="input" type="date" min={dayInput(1)} max={dayInput(730)} value={until} onInput={(e) => setUntil(e.currentTarget.value)} />
+          </label>
+        )}
         <button class="btn primary" disabled={busy || !chosen?.verified} onClick={() => run(async () => {
-          await vault.share(container.id, pick, perm);
+          await vault.share(container.id, pick, perm, perm !== "manage" && until ? { expiresAt: endOfDay(until) } : {});
           setPick("");
+          setUntil("");
           members.reload();
           toast("Accesso concesso");
         })}>Condividi</button>
@@ -1278,8 +1294,13 @@ function ShareDialog({ vault, container, onClose }: { vault: Vault; container: C
             <div class="avatar">{initials(m.displayName)}</div>
             <div class="grow">
               <div style="font-weight:500">{m.displayName}{m.userId === vault.me.id ? " (tu)" : ""}</div>
-              <div class="small muted">{m.email}</div>
+              <div class="small muted">{m.email}{m.expiresAt ? ` · accesso fino al ${new Date(m.expiresAt).toLocaleDateString("it-IT")}` : ""}</div>
             </div>
+            {m.userId !== vault.me.id && m.permission !== "manage" && (
+              <input class="input" type="date" style="width:auto" title="Scadenza dell'accesso (vuoto = senza scadenza)" aria-label={`Scadenza dell'accesso di ${m.displayName}`}
+                min={dayInput(1)} max={dayInput(730)} value={m.expiresAt ? dayInput(0, new Date(m.expiresAt)) : ""} disabled={busy}
+                onChange={(e) => { const v = e.currentTarget.value; run(async () => { await vault.share(container.id, m.userId, m.permission, { expiresAt: v ? endOfDay(v) : null }); members.reload(); toast(v ? "Scadenza impostata" : "Scadenza tolta"); }); }} />
+            )}
             <select class="input" style="width:auto" aria-label={`Permesso di ${m.displayName}`} value={m.permission} disabled={busy}
               onChange={(e) => { const p = e.currentTarget.value as Permission; run(async () => { await vault.share(container.id, m.userId, p); members.reload(); }); }}>
               {(["read", "write", "manage"] as const).map((p) => <option value={p}>{PERM_LABEL[p]}</option>)}
@@ -1289,7 +1310,7 @@ function ShareDialog({ vault, container, onClose }: { vault: Vault; container: C
         ))}
       </div>
       <GroupShares vault={vault} container={container} />
-      <div class="notice info">La chiave del cliente viene cifrata qui, con la chiave pubblica certificata di ogni destinatario o gruppo. Rimuovendo una persona o un gruppo la chiave viene ruotata subito.</div>
+      <div class="notice info">La chiave del cliente viene cifrata qui, con la chiave pubblica certificata di ogni destinatario o gruppo. Rimuovendo una persona o un gruppo la chiave viene ruotata subito. Gli accessi a tempo vengono tolti alla scadenza e la chiave viene ruotata dal primo gestore che apre StartCredentials.</div>
       <ErrorNote error={error} />
       {confirmRevoke && (
         <Dialog title="Rimuovere l'accesso?" onClose={() => setConfirmRevoke(null)}>

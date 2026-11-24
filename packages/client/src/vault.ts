@@ -804,12 +804,13 @@ export class Vault {
 
   // ---------------------------------------------------------------- condivisione
 
-  async members(containerId: string): Promise<{ userId: string; displayName: string; email: string; permission: Permission; since: string }[]> {
+  async members(containerId: string): Promise<{ userId: string; displayName: string; email: string; permission: Permission; since: string; expiresAt: string | null }[]> {
     return this.api.get(`/containers/${containerId}/members`);
   }
 
   /** Condivide un contenitore. Il destinatario deve avere una chiave certificata dall'organizzazione. */
-  async share(containerId: string, userId: string, permission: Permission): Promise<void> {
+  /** `expiresAt`: accesso a tempo (ISO); null lo rende permanente; assente lascia com'è. */
+  async share(containerId: string, userId: string, permission: Permission, opts: { expiresAt?: string | null } = {}): Promise<void> {
     const k = await this.key(containerId);
     const recipient = userId === this.me.id ? undefined : (await this.directory(true)).find((u) => u.id === userId);
     if (userId !== this.me.id && !recipient?.verified) throw new SecurityError("Il destinatario non ha una chiave certificata: chiedi a un amministratore di verificarla");
@@ -819,11 +820,11 @@ export class Vault {
       recipientPublic: recipient?.publicKeys ?? this.keys.publicKeys, permission, grantor: this.self,
     });
     try {
-      await this.api.put(`/containers/${containerId}/members`, { grant });
+      await this.api.put(`/containers/${containerId}/members`, { grant, ...(opts.expiresAt !== undefined ? { expiresAt: opts.expiresAt } : {}) });
     } catch (e) {
       if (e instanceof ApiError && e.code === "stale_key_version") {
         this.forget(containerId);
-        return this.share(containerId, userId, permission);
+        return this.share(containerId, userId, permission, opts);
       }
       throw e;
     }
