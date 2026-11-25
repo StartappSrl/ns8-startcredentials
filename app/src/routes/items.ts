@@ -32,7 +32,10 @@ async function itemContainer(db: Db | Tx, itemId: string) {
 
 async function sharedWith(db: Db | Tx, itemId: string, userId: string): Promise<boolean> {
   const r = await db.query(
-    "SELECT 1 FROM item_shares sh JOIN items i ON i.id = sh.item_id AND sh.ik_version = i.ik_version AND i.deleted_at IS NULL WHERE sh.item_id = $1 AND sh.user_id = $2",
+    `SELECT 1 FROM item_shares sh
+       JOIN items i ON i.id = sh.item_id AND sh.ik_version = i.ik_version AND i.deleted_at IS NULL
+       JOIN containers c ON c.id = i.container_id AND c.deleted_at IS NULL
+      WHERE sh.item_id = $1 AND sh.user_id = $2`,
     [itemId, userId]);
   return !!r.rowCount;
 }
@@ -452,7 +455,15 @@ export async function itemRoutes(app: FastifyInstance, ctx: Ctx) {
     }).parse(req.body);
     return tx(db, async (c) => {
       const p = await requirePermission(c, id, a.id, "write");
+      // La cartella padre deve appartenere a questo cliente (o essere una
+      // cartella dello stesso import): senza il controllo, l'import accettava
+      // un parentId qualsiasi.
+      const importFolderIds = new Set(body.folders.map((f) => f.id));
       for (const f of body.folders) {
+        if (f.parentId && !importFolderIds.has(f.parentId)) {
+          const ok = await c.query("SELECT 1 FROM folders WHERE id = $1 AND container_id = $2", [f.parentId, id]);
+          if (!ok.rowCount) throw badRequest("invalid_parent_folder");
+        }
         await c.query("INSERT INTO folders (id, container_id, parent_id, meta_enc) VALUES ($1,$2,$3,$4)", [f.id, id, f.parentId ?? null, f.metaEnc]);
       }
       for (const it of body.items) {

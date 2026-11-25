@@ -8,7 +8,8 @@
   "scripts": {
     "build": "tsc -p .",
     "start": "node dist/src/main.js",
-    "test": "tsc -p . && node --test --test-concurrency=1 dist/test/*.test.js"
+    "test": "tsc -p . && node --test --test-concurrency=1 dist/test/*.test.js",
+    "rebase-audit": "node scripts/rebase-audit.mjs"
   },
   "dependencies": {
     "@serenity-kit/opaque": "1.1.0",

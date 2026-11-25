@@ -263,11 +263,30 @@ const methods: Record<string, (...args: never[]) => unknown> = {
     for (const item of remember(await v.sharedWithMe().catch(() => [] as Item[]))) out.push({ item, where: `Condivisa da ${item.sharedBy}`, canWrite: false });
     return out;
   },
-  /** Credenziali associate a un'app Android (indirizzo androidapp://pacchetto). */
-  async lookupApp(packageName: string) {
-    const key = `androidapp://${packageName}`.toLowerCase();
+  /**
+   * Credenziali associate a un'app Android. L'indirizzo salvato può essere:
+   *   - androidapp://pacchetto            (legacy: solo pacchetto)
+   *   - androidapp://pacchetto@firmaSha256 (sicuro: pacchetto + firma)
+   *
+   * SICUREZZA: il solo nome del pacchetto è falsificabile da un APK ricompilato;
+   * quando è presente la firma del chiamante verificata nativamente (callerCert),
+   * un'associazione legata alla firma combacia SOLO se la firma coincide.
+   * COMPATIBILITÀ: le associazioni legacy senza firma continuano a combaciare,
+   * così non si rompe nulla per gli utenti esistenti (vengono rafforzate alla
+   * prossima associazione/salvataggio, che scrive la forma con firma).
+   */
+  async lookupApp(packageName: string, callerCert?: string | null) {
+    const prefix = `androidapp://${packageName}`.toLowerCase();
+    const cert = callerCert ? callerCert.toLowerCase() : null;
     return (await methods.allItems() as { item: Item; where: string; canWrite: boolean }[])
-      .filter((r) => (r.item.data.urls ?? []).some((u) => u.trim().toLowerCase() === key));
+      .filter((r) => (r.item.data.urls ?? []).some((u) => {
+        const url = u.trim().toLowerCase();
+        if (!url.startsWith(prefix)) return false;
+        const rest = url.slice(prefix.length);
+        if (rest === "") return true;            // legacy: solo pacchetto (compatibilità)
+        if (rest[0] !== "@") return false;       // es. androidapp://pkgAltro: NON combacia
+        return cert != null && rest.slice(1) === cert; // match forte: la firma deve coincidere
+      }));
   },
 
   // ---------------------------------------------------------------- modifiche

@@ -13,6 +13,11 @@ export interface AutofillRequest {
   webDomain?: string | null;
   packageName?: string | null;
   appLabel?: string | null;
+  /**
+   * Firma SHA-256 del chiamante, verificata nativamente. Lega l'associazione
+   * di un'app alla sua identità (androidapp://pkg@firma) contro il phishing.
+   */
+  callerCert?: string | null;
 }
 
 interface Native {

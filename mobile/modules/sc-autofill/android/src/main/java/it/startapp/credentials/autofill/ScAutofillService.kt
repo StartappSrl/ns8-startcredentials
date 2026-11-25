@@ -37,6 +37,14 @@ class ScAutofillService : AutofillService() {
       callback.onSuccess(null)
       return
     }
+    // SICUREZZA: il webDomain è dichiarato dall'app chiamante, quindi lo
+    // accettiamo SOLO se il chiamante è un browser noto verificato per firma.
+    // Altrimenti lo ignoriamo (un'app qualsiasi potrebbe spacciare il dominio
+    // di un altro sito per rubare le credenziali) e si combacia per pacchetto.
+    val verifiedDomain = if (screen.webDomain != null && CallerVerifier.isVerifiedBrowser(this, screen.packageName)) screen.webDomain else null
+    // Firma del chiamante: lega l'associazione dell'app alla sua identità.
+    val callerCert = CallerVerifier.certSha256(this, screen.packageName)
+
     val ids = ArrayList<AutofillId>()
     val kinds = ArrayList<String>()
     screen.usernameId?.let { ids.add(it); kinds.add("username") }
@@ -48,14 +56,17 @@ class ScAutofillService : AutofillService() {
       .putExtra(EXTRA_MODE, "fill")
       .putParcelableArrayListExtra(EXTRA_IDS, ids)
       .putStringArrayListExtra(EXTRA_KINDS, kinds)
-      .putExtra(EXTRA_DOMAIN, screen.webDomain)
+      .putExtra(EXTRA_DOMAIN, verifiedDomain)
       .putExtra(EXTRA_PACKAGE, screen.packageName)
+      .putExtra(EXTRA_CERT, callerCert)
     // Mutabile: Android aggiunge all'intent i dati della schermata.
     val pending = PendingIntent.getActivity(this, nextRequestCode(), intent, pendingFlags())
 
     val response = FillResponse.Builder()
     // Accesso in due passaggi: valori della compilazione appena fatta, senza nuovo sblocco.
-    RecentFill.match(screen.webDomain, screen.packageName)?.let { (label, values) ->
+    // SICUREZZA: la cache è ancorata all'identità VERIFICATA (dominio di browser
+    // verificato, oppure pacchetto + firma), non al dominio grezzo del chiamante.
+    RecentFill.match(verifiedDomain, screen.packageName, callerCert)?.let { (label, values) ->
       @Suppress("DEPRECATION")
       val ds = Dataset.Builder(row("StartCredentials · $label"))
       var any = false
@@ -112,11 +123,16 @@ class ScAutofillService : AutofillService() {
       callback.onSuccess()
       return
     }
+    // SICUREZZA: anche nel salvataggio il dominio vale solo da un browser
+    // verificato; la firma del chiamante lega la nuova associazione dell'app.
+    val verifiedDomain = if (screen.webDomain != null && CallerVerifier.isVerifiedBrowser(this, screen.packageName)) screen.webDomain else null
+    val callerCert = CallerVerifier.certSha256(this, screen.packageName)
     val intent = Intent()
       .setClassName(this, "$packageName.AutofillActivity")
       .putExtra(EXTRA_MODE, "save")
-      .putExtra(EXTRA_DOMAIN, screen.webDomain)
+      .putExtra(EXTRA_DOMAIN, verifiedDomain)
       .putExtra(EXTRA_PACKAGE, screen.packageName)
+      .putExtra(EXTRA_CERT, callerCert)
       .putExtra(EXTRA_SAVE_USERNAME, screen.usernameId?.let { values[it] } ?: "")
       .putExtra(EXTRA_SAVE_PASSWORD, password)
     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
@@ -133,6 +149,8 @@ class ScAutofillService : AutofillService() {
     const val EXTRA_KINDS = "sc_autofill_kinds"
     const val EXTRA_DOMAIN = "sc_autofill_domain"
     const val EXTRA_PACKAGE = "sc_autofill_package"
+    // Firma SHA-256 del chiamante verificata dal servizio (identità sicura).
+    const val EXTRA_CERT = "sc_autofill_cert"
     const val EXTRA_MODE = "sc_autofill_mode"
     const val EXTRA_SAVE_USERNAME = "sc_autofill_save_username"
     const val EXTRA_SAVE_PASSWORD = "sc_autofill_save_password"
