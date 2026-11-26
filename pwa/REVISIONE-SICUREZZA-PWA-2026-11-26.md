@@ -42,3 +42,37 @@ Le invarianti critiche reggono; lo scheletro è coerente con il modello di sicur
 StartCredentials. **Nulla osta a mantenere il branch/PR**; le raccomandazioni H1–H3 vanno
 affrontate nella Fase 1 insieme alla rotta `/m` del backend, con una nuova revisione di
 sicurezza prima del rilascio effettivo della PWA agli utenti.
+
+---
+
+## Addendum Fase 1 (26/11) — rotta `/m` + H1/H3 · Esito: **nessun bloccante**
+
+Revisione delle modifiche della Fase 1 (branch `pwa/fase1-hosting-hardening`).
+
+**Backend — rotta `/m` (`app/src/server.ts`)**
+- **Nessun path traversal**: i nomi dei file provengono da una whitelist fissa
+  (`index.html` + `pwaAssets`); le rotte sono stringhe statiche (`/m/app.js`…), **non** un
+  parametro `:file`. Il nome non è mai controllato dal client.
+- **CSP stretta** (`default-src 'none'`, tutto `'self'`, `frame-ancestors 'none'`,
+  `base-uri 'self'`, `form-action 'none'`): nessun `unsafe-inline` (l'app non ha script/stili
+  in linea). Rafforzata dagli header globali dell'`onSend` (nosniff, X-Frame-Options DENY,
+  Referrer-Policy, HSTS).
+- **Service worker con scope `/m/`**: non può controllare `/api` né altre rotte.
+- **Robustezza**: letture pigre → 404 se la build manca, il server parte comunque; cache in
+  memoria limitata a pochi file; redirect a target fisso (`/m/`, nessun open redirect);
+  app-shell pubblica ma priva di segreti (il vault richiede login+sblocco).
+
+**Client — H1/H3 e fix SW**
+- **H3**: `serverUrl` legato all'origine servente quando servito via http(s); coerente con
+  `connect-src 'self'`, fallisce in modo sicuro su origini diverse. `Setup` resta solo per `file://`.
+- **H1**: lock su `visibilitychange`→hidden e `pagehide` → `vault.lock()` azzera le chiavi
+  quando l'app va in background. Nessun effetto collaterale di sicurezza.
+- **Fix SW**: rimosso `./index.html` dal precache (il backend serve l'index su `/m/`, non su
+  `/m/index.html`): evita il fallimento di `addAll` all'install.
+
+**Verifica**: typecheck pulito su `app` e `pwa`; build esbuild della PWA riuscita e caricata
+in `app/public/m/`; smoke-test nel browser → l'app-shell si carica, la crittografia si
+inizializza e la UI si monta (il form di accesso compare direttamente, a conferma di H3).
+
+**Rimane per la Fase 2**: H2 (cifratura dei metadati di cache a riposo, design in
+`PWA-MOBILE-SCOPING-2026-11-26.md` Appendice A) come change dedicata e rivista a sé.

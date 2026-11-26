@@ -35,7 +35,10 @@ function App() {
   }, []);
 
   async function decide() {
-    const s = await getSettings();
+    let s = await getSettings();
+    // H3: servita da un backend (es. /m), il server è la stessa origine che ci ha serviti.
+    // Niente campo libero (coerente con la CSP connect-src 'self'); Setup resta solo per file://.
+    if (!s.serverUrl && location.protocol.startsWith("http")) s = await saveSettings({ serverUrl: location.origin });
     if (!s.serverUrl) return setPhase({ p: "setup" });
     setPhase({ p: "signin", canLocal: await session.canUnlockLocal() });
   }
@@ -174,10 +177,20 @@ function Main({ vault, offline }: { vault: Vault; offline: boolean }) {
 
   useEffect(() => {
     const activity = () => session.resetAutoLock();
+    // H1: blocca subito quando l'app va in background (cambio app / chiusura), oltre all'auto-lock su inattività.
+    const onHidden = () => { if (document.visibilityState === "hidden") session.lock(); };
+    const onPageHide = () => session.lock();
     addEventListener("pointerdown", activity);
     addEventListener("keydown", activity);
+    document.addEventListener("visibilitychange", onHidden);
+    addEventListener("pagehide", onPageHide);
     vault.containers().then(setContainers).catch((e) => setErr((e as Error).message));
-    return () => { removeEventListener("pointerdown", activity); removeEventListener("keydown", activity); };
+    return () => {
+      removeEventListener("pointerdown", activity);
+      removeEventListener("keydown", activity);
+      document.removeEventListener("visibilitychange", onHidden);
+      removeEventListener("pagehide", onPageHide);
+    };
   }, []);
 
   if (open) return <ContainerView vault={vault} container={open} offline={offline} onBack={() => setOpen(null)} />;

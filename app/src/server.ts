@@ -160,6 +160,49 @@ export async function buildApp(cfg: Config, db: Db, opts: { mailer?: Mailer } = 
     }
   });
 
+  // Web-app mobile (PWA): app-shell servita sotto /m/ con CSP stretta, stessa origine
+  // dell'API (niente CORS). I file arrivano dalla build della PWA copiata in public/m.
+  // Lettura pigra con cache in memoria: se la build non c'è, la rotta risponde 404 e
+  // il server parte lo stesso. Script e stili solo da 'self'; nessuna risorsa esterna.
+  const PWA_CSP =
+    "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self'; connect-src 'self'; " +
+    "manifest-src 'self'; worker-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'none'";
+  const pwaCache = new Map<string, Buffer>();
+  const pwaRead = (name: string): Buffer | null => {
+    const hit = pwaCache.get(name);
+    if (hit) return hit;
+    try {
+      // Nome nella whitelist: niente path traversal (serviamo solo i file noti).
+      const buf = readFileSync(join(APP_ROOT, "public", "m", name));
+      pwaCache.set(name, buf);
+      return buf;
+    } catch {
+      return null;
+    }
+  };
+  const pwaAssets: Record<string, string> = {
+    "app.js": "text/javascript; charset=utf-8",
+    "sw.js": "text/javascript; charset=utf-8",
+    "styles.css": "text/css; charset=utf-8",
+    "manifest.webmanifest": "application/manifest+json; charset=utf-8",
+    "icon.svg": "image/svg+xml",
+  };
+  // Base con slash finale: le risorse relative (app.js, manifest…) si risolvono sotto /m/.
+  app.get("/m", async (_req, reply) => reply.redirect("/m/", 301));
+  app.get("/m/", async (_req, reply) => {
+    const html = pwaRead("index.html");
+    if (!html) return reply.status(404).send({ error: "not_found" });
+    return reply.type("text/html; charset=utf-8").header("Content-Security-Policy", PWA_CSP).send(html);
+  });
+  for (const [name, type] of Object.entries(pwaAssets)) {
+    app.get(`/m/${name}`, async (_req, reply) => {
+      const buf = pwaRead(name);
+      if (!buf) return reply.status(404).send({ error: "not_found" });
+      // Il service worker va servito con scope /m/: nessun header particolare necessario.
+      return reply.type(type).header("Content-Security-Policy", PWA_CSP).send(buf);
+    });
+  }
+
   return app;
 }
 

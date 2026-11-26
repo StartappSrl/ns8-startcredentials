@@ -46,4 +46,12 @@ await build({
 });
 
 cpSync("static", out, { recursive: true });
-console.log(`PWA costruita in ${join(process.cwd(), out)}`);
+
+// Copia anche in app/public/m: è da lì che il backend serve la PWA sotto /m/
+// (stesso schema con cui l'estensione scrive il suo zip in app/public).
+const served = join("..", "app", "public", "m");
+rmSync(served, { recursive: true, force: true });
+mkdirSync(served, { recursive: true });
+cpSync(out, served, { recursive: true });
+
+console.log(`PWA costruita in ${join(process.cwd(), out)} e copiata in ${served}`);

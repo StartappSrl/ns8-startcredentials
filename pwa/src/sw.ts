@@ -7,7 +7,8 @@
 const sw = self as unknown as ServiceWorkerGlobalScope;
 
 const CACHE = "sc-pwa-shell-v1";
-const SHELL = ["./", "./index.html", "./app.js", "./styles.css", "./manifest.webmanifest", "./icon.svg"];
+// "./" è il documento (il backend serve l'index su /m/, non su /m/index.html).
+const SHELL = ["./", "./app.js", "./styles.css", "./manifest.webmanifest", "./icon.svg"];
 
 sw.addEventListener("install", (e) => {
   e.waitUntil(caches.open(CACHE).then((c) => c.addAll(SHELL)).then(() => sw.skipWaiting()));
