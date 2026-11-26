@@ -52,10 +52,12 @@ jobs:
   # del repository NS8 (repodata.json) interrogando i tag pubblicati e lo
   # serve via HTTPS su GitHub Pages, cosi' il modulo e i suoi aggiornamenti
   # compaiono nel Software Center dei cluster iscritti al repository.
+  # Si puo' anche lanciare a mano ("Run workflow") per rigenerare l'indice
+  # senza un nuovo rilascio: createrepo.py legge comunque tutti i tag su ghcr.
   repodata:
     name: Indice repository per il Software Center
     needs: publish
-    if: github.ref_type == 'tag'
+    if: github.ref_type == 'tag' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-24.04
     permissions:
       contents: read
