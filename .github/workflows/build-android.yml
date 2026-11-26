@@ -76,7 +76,7 @@ jobs:
       - name: Rinomina
         run: cp mobile/android/app/build/outputs/apk/release/app-release.apk "${{ steps.name.outputs.file }}"
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: StartCredentials-APK
           path: ${{ steps.name.outputs.file }}
