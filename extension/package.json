@@ -20,7 +20,7 @@
     "@fontsource/plus-jakarta-sans": "5.1.1",
     "@startcredentials/client": "0.9.4",
     "preact": "10.25.4",
-    "qrcode-generator": "1.4.4"
+    "qrcode-generator": "2.0.4"
   },
   "devDependencies": {
     "@types/chrome": "0.0.287",
