@@ -238,34 +238,32 @@ idempotente con conflict detection · Web Share / copia rapida.
 - **Parità UI**: decidere presto se puntare all'Opzione A (riuso UI estensione) per non
   mantenere due interfacce.
 
-## Appendice A — Design H2: cifratura dei metadati di cache a riposo
+## Appendice A — H2: cifratura dei metadati di cache a riposo (**implementata**, Fase 2)
 
-Hardening futuro (change dedicata e rivista a sé, **non** nella PR di hosting): oggi la
-cache offline tiene in chiaro — a livello di DB — i metadati E2EE e la rubrica
-(`/users/directory`: email e nomi dei colleghi). Su dispositivo condiviso/compromesso sono
+Prima, la cache offline teneva in chiaro — a livello di DB — i metadati E2EE e la rubrica
+(`/users/directory`: email e nomi dei colleghi): su dispositivo condiviso/compromesso
 leggibili senza master password. I segreti veri restano comunque avvolti; qui si protegge
-la **PII di metadati**.
+la **PII di metadati**. Implementazione in `pwa/src/cacheCrypto.ts` + `offlineFetch.ts` +
+`session.ts`.
 
-Vincolo: `deriveMasterKey` è costoso (Argon2id ~256 MiB) e la master key viene azzerata
-dentro `Vault.unlock`. Perciò:
-
-- **`/me` resta in chiaro in cache** (serve per il bootstrap dello sblocco offline: da lì
-  si leggono `kdfParams`+`privateEnc`; la parte segreta è già avvolta, il resto — email,
-  publicKeys — non è segreto).
+- **`/me` resta in chiaro in cache** (bootstrap dello sblocco offline: da lì si leggono
+  `kdfParams`+`privateEnc`; la parte segreta è già avvolta, il resto — email, publicKeys —
+  non è segreto).
 - **Tutto il resto in cache** (`containers`, `items`, `users/directory`, `groups`,
-  `shared-items`, `attachments`) cifrato con una **cacheKey** AES-GCM a 256 bit, IV casuale
-  per voce, tenuta **solo in RAM** accanto al Vault.
+  `shared-items`, `attachments`) cifrato con una **cacheKey** AES-GCM 256, **IV casuale per
+  voce**, tenuta **solo in RAM** (CryptoKey non estraibile) accanto al Vault.
 
-Due opzioni per la cacheKey, da scegliere in fase di implementazione:
+**cacheKey** = `HKDF-SHA256` (WebCrypto, `info` dedicata) sul materiale di chiave che il
+Vault già tiene in RAM (`vault.serialize().keys`). Scelta rispetto alle due opzioni di
+progetto: variante dell'opzione 1 fatta **interamente nella PWA**, senza toccare l'SDK E2EE
+condiviso (nessun rischio per estensione/app nativa) e senza un secondo passaggio Argon2id.
+La derivazione via HKDF è unidirezionale: non espone le chiavi private. È **deterministica**
+dallo stesso materiale → ciò che è cifrato online è decifrabile offline dopo lo sblocco
+(stesse chiavi → stessa cacheKey). Alla **rotazione delle chiavi** la cacheKey cambia: le
+voci vecchie diventano illeggibili (trattate come cache miss) e si riscrivono cifrate al
+primo accesso online.
 
-1. **Derivata dalla master key** (preferibile): esporre dall'SDK una
-   `deriveCacheKey(masterKey)` (HKDF-SHA256, info distinta) calcolata dentro `Vault.unlock`
-   prima del wipe, e restituirla al chiamante. Nessun secondo passaggio Argon2id; la cacheKey
-   eredita la robustezza della master key.
-2. **Da WebCrypto sul password** (solo se non si tocca l'SDK): `HKDF` dal password con salt
-   casuale persistito. Più debole su password deboli, ma l'attaccante preferirebbe comunque
-   forzare l'Argon2id delle chiavi vere: accettabile *solo* per la PII di metadati.
-
-Logout/lock azzerano la cacheKey (come il Vault). La migrazione è trasparente: le voci
-cifrate portano un prefisso di versione; quelle vecchie in chiaro vengono riscritte
-cifrate al primo accesso online. Richiede la sua **revisione di sicurezza** dedicata.
+`adopt()` deriva la cacheKey allo sblocco; `lock()`/`logout()` la azzerano (con il Vault).
+**Migrazione trasparente**: ogni voce porta il flag `enc`; le vecchie voci in chiaro
+restano leggibili e vengono riscritte cifrate al primo accesso online. Lettura **fail-safe**:
+voce cifrata senza chiave (bloccato) o manomessa → trattata come cache miss, nessun leak.

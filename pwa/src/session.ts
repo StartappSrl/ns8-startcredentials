@@ -9,6 +9,7 @@
  */
 import { Api, ApiError, login, ready, Vault } from "@startcredentials/client";
 import { makeOfflineFetch, NetState } from "./offlineFetch.js";
+import { deriveCacheKey } from "./cacheCrypto.js";
 import { getCached, getMeta, setMeta, wipeAll } from "./db.js";
 
 export interface Settings {
@@ -33,6 +34,8 @@ export class SessionError extends Error {}
 class Session {
   vault: Vault | null = null;
   private token: string | null = null;
+  /** H2: chiave di cifratura della cache, solo in RAM mentre il vault è sbloccato. */
+  private cacheKey: CryptoKey | null = null;
   net: NetState = { offline: !navigator.onLine };
   onLock: (() => void) | null = null;
   onNetChange: ((offline: boolean) => void) | null = null;
@@ -43,7 +46,7 @@ class Session {
     if (!s.serverUrl) throw new SessionError("Server non configurato");
     const origin = new URL(s.serverUrl).origin;
     this.net.onChange = (off) => this.onNetChange?.(off);
-    return new Api({ baseUrl: s.serverUrl, token: this.token ?? undefined, fetch: makeOfflineFetch(origin, this.net) });
+    return new Api({ baseUrl: s.serverUrl, token: this.token ?? undefined, fetch: makeOfflineFetch(origin, this.net, () => this.cacheKey) });
   }
 
   /** Accesso online: OPAQUE + sblocco. Lo scheletro gestisce solo lo stato "active". */
@@ -74,6 +77,8 @@ class Session {
 
   private async adopt(vault: Vault): Promise<void> {
     this.vault = vault;
+    // H2: deriva la chiave di cifratura della cache dal materiale di chiave del vault (solo RAM).
+    this.cacheKey = await deriveCacheKey(vault.serialize().keys).catch(() => null);
     // Org pinning (TOFU): fissa/aggiorna la chiave dopo una rotazione legittima già verificata da unlock.
     if (vault.me.org) await saveSettings({ pinnedOrgSignPublic: vault.me.org.signPublic });
     this.resetAutoLock();
@@ -101,6 +106,7 @@ class Session {
     this.vault?.lock();
     this.vault = null;
     this.token = null;
+    this.cacheKey = null; // H2: via la chiave di cache dalla RAM
     this.onLock?.();
   }
 

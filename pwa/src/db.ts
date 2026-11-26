@@ -13,7 +13,15 @@ const DB_VERSION = 1;
 const CACHE = "cache";
 const META = "meta";
 
-export interface CachedResponse { status: number; contentType: string; body: string; at: number }
+export interface CachedResponse {
+  status: number;
+  contentType: string;
+  /** b64 del corpo; se `enc`, è b64 di (IV ‖ ciphertext) AES-GCM (vedi cacheCrypto.ts). */
+  body: string;
+  at: number;
+  /** true per le voci cifrate a riposo (tutto tranne /me). Assente = vecchia voce in chiaro. */
+  enc?: boolean;
+}
 
 let dbp: Promise<IDBDatabase> | null = null;
 
