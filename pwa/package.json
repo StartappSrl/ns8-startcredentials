@@ -1,6 +1,6 @@
 {
   "name": "@startcredentials/pwa",
-  "version": "0.9.3",
+  "version": "0.9.4",
   "private": true,
   "license": "GPL-3.0-or-later",
   "type": "module",
@@ -10,8 +10,8 @@
     "build": "tsc --noEmit -p . && node build.mjs"
   },
   "dependencies": {
-    "@startcredentials/client": "0.9.3",
-    "@startcredentials/crypto": "0.9.3",
+    "@startcredentials/client": "0.9.4",
+    "@startcredentials/crypto": "0.9.4",
     "preact": "10.25.4"
   },
   "devDependencies": {

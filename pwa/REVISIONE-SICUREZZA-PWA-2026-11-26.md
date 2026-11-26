@@ -245,3 +245,36 @@ nessuna modifica ai flussi di auth/crypto/dati, sola lettura invariata.
 **Verifica**: typecheck `app`+`pwa` puliti; build esbuild + copia font ok; load-test locale (schermate
 di accesso in **chiaro e scuro**) sotto la CSP con `font-src 'self'` → i font si caricano, layout
 corretto, nessuna violazione CSP (solo l'errore di registrazione SW tipico del mini-server locale).
+
+---
+
+## Addendum Fase 7 (26/11) — rifiniture dalla revisione indipendente della 0.9.3 · Esito: **nessun bloccante**
+
+Una revisione indipendente della 0.9.3 (coordinamento) ha dato **verdetto positivo** (sicura in
+produzione, dettaglio password corretto, responsive + tema scuro ok) con alcune rifiniture, applicate
+qui (0.9.4).
+
+**Corretti nel codice**
+- **B2 — la maschera rivelava la lunghezza**: `SecretField` usava `"•".repeat(min(14,max(8,len)))`,
+  esponendo la lunghezza reale per password di 8–14 caratteri. Ora **numero fisso di pallini (10)**,
+  indipendente dalla lunghezza.
+- **M3 — safe-area in alto**: la `.topbar` sticky (`top:0`) non rispettava la notch/Dynamic Island in
+  standalone. Aggiunto `padding-top: env(safe-area-inset-top)` (+ left/right su topbar e `.content`).
+- **B1 — target touch < 44px**: i chip "Copia/Mostra/Nascondi" e i ghost "Blocca/Esci" erano ~36px.
+  Portati a `min-height: 44px` (chip anche padding/raggio adeguati).
+
+**Limiti di piattaforma PWA (non correggibili nel codice) — messi a verbale**
+- **M1 — pulizia appunti inaffidabile su mobile**: su iOS Safari / Android Chrome
+  `clipboard.readText()` e `writeText("")` dopo 30s **senza attivazione utente** sono spesso negati,
+  quindi la password/OTP copiata **può restare negli appunti a tempo indefinito**. Il codice resta
+  best-effort/fail-safe (dove permesso svuota, altrimenti non tocca nulla). **Mitigazione UI**:
+  aggiunto nel dettaglio un avviso ("sul telefono conviene cancellare gli appunti a mano"). Rischio
+  residuo **accettato** (limite della piattaforma, come per molti gestori password via web).
+- **M2 — snapshot dell'app-switcher**: il SO può fotografare la schermata con la password rivelata
+  prima del lock; le **PWA non hanno `FLAG_SECURE`** (a differenza dell'app Android nativa, che ce
+  l'ha). Il lock-on-background (H1) riduce la finestra ma non elimina lo snapshot già catturato.
+  Rischio **accettato**: chi vuole la protezione schermo usi l'app nativa. Mitigazione per l'utente:
+  nascondere la password (toggle) prima di cambiare app.
+
+**Verifica**: typecheck `app`+`pwa` puliti; build ok; layout mobile (375px) verificato nel browser
+(topbar con safe-area, chip/pulsanti ≥44px, maschera a lunghezza fissa).

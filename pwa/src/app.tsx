@@ -279,7 +279,7 @@ function SecretField({ label, value }: { label: string; value: string }) {
     <div class="field">
       <div class="field-label">{label}</div>
       <div class="field-row">
-        <span class="field-val mono secret">{show ? value : "•".repeat(Math.min(14, Math.max(8, value.length)))}</span>
+        <span class="field-val mono secret">{show ? value : "••••••••••"}</span>{/* B2: lunghezza fissa, non rivela quella reale */}
         <button type="button" class="chip" onClick={() => setShow((v) => !v)}>{show ? "Nascondi" : "Mostra"}</button>
         <CopyBtn value={value} />
       </div>
@@ -355,6 +355,12 @@ function ItemDetail({ item, offline, onBack }: { item: Item; offline: boolean; o
             {empty && <p class="muted">Nessun dettaglio da mostrare.</p>}
           </div>
         </div>
+        {/* M1: su telefono gli appunti spesso non si svuotano da soli; avvisa l'utente. */}
+        {(d.password || totpUri || d.fields?.some((f) => f.secret)) && (
+          <p class="muted small" style="padding:0 4px">
+            Dopo la copia gli appunti si svuotano da soli dopo 30s solo dove il browser lo consente: sul telefono conviene cancellarli a mano.
+          </p>
+        )}
       </div>
     </div>
   );
