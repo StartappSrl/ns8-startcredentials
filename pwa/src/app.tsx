@@ -235,6 +235,9 @@ function UnlockLocal({ onUnlocked, onBack }: { onUnlocked: () => void; onBack: (
   );
 }
 
+/** Secondi dopo i quali gli appunti vengono svuotati (come l'estensione). */
+const CLIPBOARD_CLEAR_SECONDS = 30;
+
 /** Pulsante "copia" con conferma; usa la clipboard solo su gesto dell'utente. */
 function CopyBtn({ value, label = "Copia" }: { value: string; label?: string }) {
   const [done, setDone] = useState(false);
@@ -243,6 +246,15 @@ function CopyBtn({ value, label = "Copia" }: { value: string; label?: string }) 
       await navigator.clipboard.writeText(value);
       setDone(true);
       setTimeout(() => setDone(false), 1500);
+      // Auto-pulizia dopo N secondi, come l'estensione: svuota SOLO se gli appunti
+      // contengono ancora il valore copiato (per non cancellare altro). Best-effort:
+      // su mobile readText può non essere permesso senza gesto → in tal caso si lascia stare.
+      setTimeout(async () => {
+        try {
+          const cur = await navigator.clipboard.readText();
+          if (cur === value) await navigator.clipboard.writeText("");
+        } catch { /* readText non permesso o pagina non a fuoco: niente auto-pulizia */ }
+      }, CLIPBOARD_CLEAR_SECONDS * 1000);
     } catch { /* clipboard non disponibile (contesto non sicuro o permesso negato) */ }
   };
   return <button type="button" class="chip" onClick={copy}>{done ? "Copiato ✓" : label}</button>;

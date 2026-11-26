@@ -203,9 +203,11 @@ note e campi personalizzati (quelli segreti mascherati). Nuova dipendenza: `@sta
   → i segreti spariscono dal DOM. Cambiando app sul telefono la PWA si blocca subito (comportamento H1
   esistente).
 - **Clipboard**: "Copia" scrive il segreto negli appunti di sistema **su tocco dell'utente** (standard
-  per un gestore password, come l'estensione). Esposizione: altre app possono leggere gli appunti e il
-  valore resta finché non sovrascritto. Niente auto-pulizia (possibile hardening futuro). In contesto
-  non sicuro/permesso negato fallisce in silenzio.
+  per un gestore password, come l'estensione). **Auto-pulizia dopo 30s** (come l'estensione): un timer
+  svuota gli appunti **solo se contengono ancora il valore copiato** (confronto via `readText`, per non
+  cancellare altro). Best-effort/fail-safe: su mobile `readText` può non essere permesso senza gesto →
+  in tal caso non si svuota (nessun danno). In contesto non sicuro/permesso negato la copia stessa
+  fallisce in silenzio.
 - **OTP**: calcolato in locale con `@noble/hashes` (già nel bundle, librerie da audit) — **nessuna
   rete, nessun WASM, nessun eval** → nessun impatto CSP. Il segreto otpauth sta in RAM per la vita del
   componente, rilasciato allo smontaggio/blocco.
