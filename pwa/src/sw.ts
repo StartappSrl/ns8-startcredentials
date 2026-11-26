@@ -6,9 +6,13 @@
  */
 const sw = self as unknown as ServiceWorkerGlobalScope;
 
-const CACHE = "sc-pwa-shell-v1";
+const CACHE = "sc-pwa-shell-v2";
 // "./" è il documento (il backend serve l'index su /m/, non su /m/index.html).
-const SHELL = ["./", "./app.js", "./styles.css", "./manifest.webmanifest", "./icon.svg"];
+const SHELL = [
+  "./", "./app.js", "./styles.css", "./manifest.webmanifest", "./icon.svg",
+  "./fonts/jakarta-400.woff2", "./fonts/jakarta-500.woff2", "./fonts/jakarta-600.woff2",
+  "./fonts/jakarta-700.woff2", "./fonts/mono-400.woff2", "./fonts/mono-500.woff2",
+];
 
 sw.addEventListener("install", (e) => {
   e.waitUntil(caches.open(CACHE).then((c) => c.addAll(SHELL)).then(() => sw.skipWaiting()));

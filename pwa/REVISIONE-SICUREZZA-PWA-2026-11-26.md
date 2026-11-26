@@ -218,3 +218,28 @@ note e campi personalizzati (quelli segreti mascherati). Nuova dipendenza: `@sta
 fix (carica e renderizza, nessun errore di modulo/CSP; la nuova dip crypto/OTP non introduce
 violazioni). Test funzionale del dettaglio (reveal/copia/OTP) a carico dell'utente dopo il deploy
 (serve il login a un vault reale).
+
+---
+
+## Addendum Fase 6 (26/11) — restyle con lo stile dell'app (token + font) · Esito: **nessun bloccante**
+
+Su richiesta dell'utente la PWA adotta il **design system dell'estensione/app**: stessi token
+(tema chiaro + scuro automatico via `prefers-color-scheme`), componenti (card/pulsanti/liste/campi) e
+**font self-hosted** Plus Jakarta Sans + JetBrains Mono (gli stessi 6 woff2 di `@fontsource` che usa
+l'estensione, copiati in build). Cambiamento **puramente presentazionale** (CSS + classi del markup):
+nessuna modifica ai flussi di auth/crypto/dati, sola lettura invariata.
+
+**Analisi di sicurezza**
+- **CSP**: aggiunto `font-src 'self'` a `PWA_CSP` (solo questa direttiva). Consente di caricare font
+  **solo dalla stessa origine**; nessun CDN esterno. Non amplia `script-src`/`connect-src`. I 6 woff2
+  sono serviti dal backend via la **whitelist fissa** `/m/fonts/*.woff2` (nomi letterali, nessun path
+  traversal), con la stessa CSP stretta.
+- **Nessun contenuto eseguibile**: i font sono asset statici; nessun nuovo egress di rete (tutto da
+  `'self'`).
+- **Service worker**: la precache della shell ora include i 6 font (avvio offline corretto); il SW
+  continua a **non toccare `/api`**. Versione cache `v1`→`v2` per sostituire la shell vecchia.
+- **Nessun segreto coinvolto**; H1/H2/H3, MFA e dettaglio invariati.
+
+**Verifica**: typecheck `app`+`pwa` puliti; build esbuild + copia font ok; load-test locale (schermate
+di accesso in **chiaro e scuro**) sotto la CSP con `font-src 'self'` → i font si caricano, layout
+corretto, nessuna violazione CSP (solo l'errore di registrazione SW tipico del mini-server locale).
