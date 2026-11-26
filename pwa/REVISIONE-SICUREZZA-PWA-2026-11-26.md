@@ -183,3 +183,65 @@ riusando **le stesse funzioni del client SDK già usate dall'estensione** (`veri
 
 **Verifica**: typecheck `pwa` pulito + build esbuild ok. Test end-to-end del codice MFA su istanza
 pentest (account di test con TOTP) dopo il deploy.
+
+---
+
+## Addendum Fase 5 (26/11) — dettaglio elemento: mostra/copia password, OTP, campi · Esito: **nessun bloccante**
+
+**Lacuna d'uso.** Lo scheletro mostrava solo l'elenco (nome/utente/tipo): non si potevano **vedere le
+password**. Aggiunta la schermata di dettaglio in sola lettura (`ItemDetail` in `app.tsx`): password
+con **mostra/nascondi** + copia, **codice OTP (2FA)** calcolato in locale, nome utente, indirizzi,
+note e campi personalizzati (quelli segreti mascherati). Nuova dipendenza: `@startcredentials/crypto`
+(sorella di workspace, già nel bundle in modo transitivo) per `generateTotp`/`parseOtpauthUri`.
+
+**Analisi di sicurezza**
+- **Segreti in chiaro solo su gesto esplicito**: password/campi segreti sono nascosti di default e
+  rivelati solo premendo "Mostra". I dati sono già decifrati in RAM dal Vault **sbloccato**: mostrarli
+  non abbassa la soglia. Lo stato "rivelato" vive **solo nello stato del componente/DOM**, mai scritto
+  su IndexedDB né in cache (H2 invariato).
+- **Azzeramento al blocco**: auto-lock, `visibilitychange`→hidden (H1) e `pagehide` smontano la vista
+  → i segreti spariscono dal DOM. Cambiando app sul telefono la PWA si blocca subito (comportamento H1
+  esistente).
+- **Clipboard**: "Copia" scrive il segreto negli appunti di sistema **su tocco dell'utente** (standard
+  per un gestore password, come l'estensione). **Auto-pulizia dopo 30s** (come l'estensione): un timer
+  svuota gli appunti **solo se contengono ancora il valore copiato** (confronto via `readText`, per non
+  cancellare altro). Best-effort/fail-safe: su mobile `readText` può non essere permesso senza gesto →
+  in tal caso non si svuota (nessun danno). In contesto non sicuro/permesso negato la copia stessa
+  fallisce in silenzio.
+- **OTP**: calcolato in locale con `@noble/hashes` (già nel bundle, librerie da audit) — **nessuna
+  rete, nessun WASM, nessun eval** → nessun impatto CSP. Il segreto otpauth sta in RAM per la vita del
+  componente, rilasciato allo smontaggio/blocco.
+- **Link esterni**: `<a target="_blank" rel="noopener noreferrer">` — niente reverse-tabnabbing, nessun
+  referrer anomalo; `default-src 'none'` non blocca la navigazione top-level avviata dall'utente.
+- **Sola lettura**: nessuna modifica/scrittura; coerente con l'ambito PWA. Nessuna nuova chiamata di
+  rete; H1/H2/H3 e offline invariati.
+
+**Verifica**: typecheck `pwa` pulito + build esbuild ok; load-test locale del bundle sotto la CSP del
+fix (carica e renderizza, nessun errore di modulo/CSP; la nuova dip crypto/OTP non introduce
+violazioni). Test funzionale del dettaglio (reveal/copia/OTP) a carico dell'utente dopo il deploy
+(serve il login a un vault reale).
+
+---
+
+## Addendum Fase 6 (26/11) — restyle con lo stile dell'app (token + font) · Esito: **nessun bloccante**
+
+Su richiesta dell'utente la PWA adotta il **design system dell'estensione/app**: stessi token
+(tema chiaro + scuro automatico via `prefers-color-scheme`), componenti (card/pulsanti/liste/campi) e
+**font self-hosted** Plus Jakarta Sans + JetBrains Mono (gli stessi 6 woff2 di `@fontsource` che usa
+l'estensione, copiati in build). Cambiamento **puramente presentazionale** (CSS + classi del markup):
+nessuna modifica ai flussi di auth/crypto/dati, sola lettura invariata.
+
+**Analisi di sicurezza**
+- **CSP**: aggiunto `font-src 'self'` a `PWA_CSP` (solo questa direttiva). Consente di caricare font
+  **solo dalla stessa origine**; nessun CDN esterno. Non amplia `script-src`/`connect-src`. I 6 woff2
+  sono serviti dal backend via la **whitelist fissa** `/m/fonts/*.woff2` (nomi letterali, nessun path
+  traversal), con la stessa CSP stretta.
+- **Nessun contenuto eseguibile**: i font sono asset statici; nessun nuovo egress di rete (tutto da
+  `'self'`).
+- **Service worker**: la precache della shell ora include i 6 font (avvio offline corretto); il SW
+  continua a **non toccare `/api`**. Versione cache `v1`→`v2` per sostituire la shell vecchia.
+- **Nessun segreto coinvolto**; H1/H2/H3, MFA e dettaglio invariati.
+
+**Verifica**: typecheck `app`+`pwa` puliti; build esbuild + copia font ok; load-test locale (schermate
+di accesso in **chiaro e scuro**) sotto la CSP con `font-src 'self'` → i font si caricano, layout
+corretto, nessuna violazione CSP (solo l'errore di registrazione SW tipico del mini-server locale).

@@ -47,6 +47,20 @@ await build({
 
 cpSync("static", out, { recursive: true });
 
+// Caratteri self-hosted (stesso stile dell'app): copiati da @fontsource come fa l'estensione.
+const fonts = {
+  "jakarta-400.woff2": "plus-jakarta-sans/files/plus-jakarta-sans-latin-400-normal.woff2",
+  "jakarta-500.woff2": "plus-jakarta-sans/files/plus-jakarta-sans-latin-500-normal.woff2",
+  "jakarta-600.woff2": "plus-jakarta-sans/files/plus-jakarta-sans-latin-600-normal.woff2",
+  "jakarta-700.woff2": "plus-jakarta-sans/files/plus-jakarta-sans-latin-700-normal.woff2",
+  "mono-400.woff2": "jetbrains-mono/files/jetbrains-mono-latin-400-normal.woff2",
+  "mono-500.woff2": "jetbrains-mono/files/jetbrains-mono-latin-500-normal.woff2",
+};
+mkdirSync(join(out, "fonts"), { recursive: true });
+for (const [dst, src] of Object.entries(fonts)) {
+  cpSync(join("..", "node_modules", "@fontsource", src), join(out, "fonts", dst));
+}
+
 // Copia anche in app/public/m: è da lì che il backend serve la PWA sotto /m/
 // (stesso schema con cui l'estensione scrive il suo zip in app/public).
 const served = join("..", "app", "public", "m");

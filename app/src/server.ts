@@ -172,7 +172,7 @@ export async function buildApp(cfg: Config, db: Db, opts: { mailer?: Mailer } = 
     // 'wasm-unsafe-eval' is required for libsodium's WebAssembly build (Vault.unlock / OPAQUE).
     // It permits WebAssembly.compile/instantiate ONLY — it does NOT enable JS eval() or new Function().
     "default-src 'none'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self'; img-src 'self'; connect-src 'self'; " +
-    "manifest-src 'self'; worker-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'none'";
+    "font-src 'self'; manifest-src 'self'; worker-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'none'";
   const pwaCache = new Map<string, Buffer>();
   const pwaRead = (name: string): Buffer | null => {
     const hit = pwaCache.get(name);
@@ -192,6 +192,13 @@ export async function buildApp(cfg: Config, db: Db, opts: { mailer?: Mailer } = 
     "styles.css": "text/css; charset=utf-8",
     "manifest.webmanifest": "application/manifest+json; charset=utf-8",
     "icon.svg": "image/svg+xml",
+    // Caratteri self-hosted (stesso stile dell'app). Nomi fissi: nessun path traversal.
+    "fonts/jakarta-400.woff2": "font/woff2",
+    "fonts/jakarta-500.woff2": "font/woff2",
+    "fonts/jakarta-600.woff2": "font/woff2",
+    "fonts/jakarta-700.woff2": "font/woff2",
+    "fonts/mono-400.woff2": "font/woff2",
+    "fonts/mono-500.woff2": "font/woff2",
   };
   // Base con slash finale: le risorse relative (app.js, manifest…) si risolvono sotto /m/.
   app.get("/m", async (_req, reply) => reply.redirect("/m/", 301));
