@@ -1,0 +1,192 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "repository metadata",
+  "description": "Schema for repodata.json",
+  "$id": "http://schema.nethserver.org/cluster/repository-metadata.json",
+  "examples": [
+    [
+      {
+        "id": "dokuwiki",
+        "name": "Dokuwiki",
+        "description": {
+          "en": "Auto-generated description for traefik"
+        },
+        "logo": "logo.png",
+        "screenshots": [
+          "screenshots/template:dokuwiki_template.png"
+        ],
+        "categories": [
+          "unknown"
+        ],
+        "authors": [
+          {
+            "name": "unknown",
+            "email": "info@nethserver.org"
+          }
+        ],
+        "docs": {
+          "documentation_url": "https://docs.nethserver.org",
+          "bug_url": "https://github.com/NethServer/dev",
+          "code_url": "https://github.com/NethServer/",
+          "relnotes_url": "https://github.com/NethServer/ns8-kickstart/releases"
+        },
+        "source": "ghcr.io/nethserver/dokuwiki",
+        "versions": [
+          {
+            "tag": "0.0.2",
+            "testing": false,
+            "labels": {
+              "io.buildah.version": "1.19.6",
+              "org.nethserver.rootfull": "0",
+              "org.nethserver.tcp_ports_demand": "1"
+            }
+          },
+          {
+            "tag": "0.0.1",
+            "testing": false,
+            "labels": {
+              "io.buildah.version": "1.19.6",
+              "org.nethserver/rootfull": "0",
+              "org.nethserver/tcp_ports_demand": "1"
+            }
+          },
+          {
+            "tag": "0.0.1-alpha1",
+            "testing": true,
+            "labels": {
+              "io.buildah.version": "1.19.6",
+              "org.nethserver/rootfull": "0",
+              "org.nethserver/tcp_ports_demand": "1"
+            }
+          }
+        ]
+      }
+    ]
+  ],
+  "type": "array",
+  "items": {
+    "type": "object",
+    "properties": {
+     "id": {
+        "type": "string",
+        "description": "Unique id of a package"
+      },
+      "name": {
+        "type": "string",
+        "description": "Common name of a package"
+      },
+      "upstream_name": {
+        "type": "string",
+        "description": "The alternative software name and version number, if they differ from the package name and version",
+        "example": "Nextcloud Hub 7"
+      },
+      "description": {
+        "type": "object",
+        "description": "A map of language code and description of the packaged translated in the indexed language"
+      },
+      "logo": {
+        "type": [
+          "string",
+          "null"
+        ],
+        "description": "The filename of the logo. The logo must be a PNG image of 256x256 pixels"
+      },
+      "categories": {
+        "type": "array",
+        "items": {
+          "type": "string"
+        }
+      },
+      "authors": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "parameters": {
+            "name": {
+              "type": "string",
+              "description": "Author full name"
+            },
+            "email": {
+              "type": "idn-email",
+              "description": "Author mail address"
+            }
+          }
+        }
+      },
+      "docs": {
+        "type": "object",
+        "parameters": {
+          "terms_url": {
+            "type": "string",
+            "format": "uri",
+            "description": "Optional link to the application Terms & Conditions document"
+          },
+          "documentation_url": {
+            "type": "string",
+            "format": "uri",
+            "description": "Link to the package documentation"
+          },
+          "bug_url": {
+            "type": "string",
+            "format": "uri",
+            "description": "Link to the package issue tracker"
+          },
+          "code_url": {
+            "type": "string",
+            "format": "uri",
+            "description": "Link to the source code repository"
+          },
+          "relnotes_url": {
+            "type": "string",
+            "format": "uri",
+            "description": "Optional link to the application release notes"
+          }
+        },
+        "required": [
+          "documentation_url",
+          "bug_url",
+          "code_url"
+        ]
+      },
+      "source": {
+        "type": "string",
+        "description": "URL of package inside a container registry. The URL must not contain the prefix 'docker://' or similar"
+      },
+      "versions": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "properties": {
+            "tag": {
+              "type": "string",
+              "description": "The package version which must be valid semantic version, like '1.0.0"
+            },
+            "testing": {
+              "type": "boolean",
+              "description": "Set to 'true' if this version is pre-release according to semantic versioning (https://semver.org)"
+            },
+            "labels": {
+              "type": "object",
+              "description": "Image label, see official specification https://github.com/opencontainers/image-spec/blob/master/annotations.md"
+            }
+          },
+          "required": [
+            "tag",
+            "testing",
+            "labels"
+          ]
+        }
+      }
+    },
+    "required": [
+      "name",
+      "description",
+      "logo",
+      "categories",
+      "authors",
+      "docs",
+      "source",
+      "versions"
+    ]
+  }
+}

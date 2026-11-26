@@ -1,0 +1,5 @@
+# Dipendenze per la generazione e validazione dell'indice repository NS8.
+# skopeo NON e' un pacchetto pip: va installato a parte (apt-get install skopeo).
+semver>=3.0,<4
+filetype>=1.2,<2
+jsonschema>=4.0,<5
