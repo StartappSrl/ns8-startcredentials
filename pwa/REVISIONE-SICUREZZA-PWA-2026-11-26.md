@@ -76,3 +76,39 @@ inizializza e la UI si monta (il form di accesso compare direttamente, a conferm
 
 **Rimane per la Fase 2**: H2 (cifratura dei metadati di cache a riposo, design in
 `PWA-MOBILE-SCOPING-2026-11-26.md` Appendice A) come change dedicata e rivista a sé.
+
+---
+
+## Addendum Fase 2 (26/11) — H2 cifratura metadati di cache · Esito: **nessun bloccante**
+
+Revisione dell'implementazione di H2 (`cacheCrypto.ts`, `offlineFetch.ts`, `session.ts`,
+`db.ts`). Scelta architetturale: **interamente nella PWA**, nessuna modifica all'SDK E2EE
+condiviso → zero rischio per estensione e app nativa.
+
+- **Derivazione chiave**: `HKDF-SHA256` (WebCrypto) sul materiale di chiave che il Vault già
+  tiene in RAM. HKDF è un PRF **unidirezionale**: non espone né indebolisce le chiavi private.
+  Nessun secondo Argon2id. L'IKM viene azzerato dopo la derivazione.
+- **Chiave solo in RAM, non estraibile**: `CryptoKey` con `extractable=false`; mai scritta su
+  IndexedDB; azzerata a `lock()`/`logout()` insieme al Vault.
+- **Copertura**: cifrate tutte le voci di cache **tranne `/me`** (necessario in chiaro per il
+  bootstrap dello sblocco; parte segreta già avvolta). La PII di rubrica/metadati, prima in
+  chiaro, è ora cifrata.
+- **AES-GCM**: **IV casuale per voce** (verificato unico in test), integrità AEAD (la
+  manomissione fa fallire la decifratura). Volume di scrittura basso → nessun rischio di
+  riuso IV.
+- **Gating**: le voci cifrate sono leggibili solo dopo uno sblocco riuscito (che ri-deriva la
+  cacheKey dal `/me` in chiaro). Senza master password restano illeggibili.
+- **Fail-safe**: voce cifrata senza chiave o manomessa → cache miss, nessun leak né crash.
+- **Poisoning**: la cache tiene solo ciphertext del server, che il Vault riverifica con la sua
+  crittografia AEAD; una voce falsificata causa al più un errore di decifratura, mai forgiatura.
+- **Limite onesto**: la cacheKey deriva da materiale che l'app ha comunque in RAM; H2 alza
+  l'asticella sulla **PII a riposo**, non cambia il modello di minaccia in-RAM (chi legge la
+  memoria del processo ha già il Vault). Inerente e accettabile.
+
+**Verifica**: typecheck pulito su `pwa`; test di roundtrip della crittografia (deriva/cifra/
+decifra, chiave deterministica, chiave errata e ciphertext manomesso che falliscono, IV unico):
+5/5 pass.
+
+Con H2 implementata e rivista, i tre hardening H1–H3 e H2 sono **chiusi**. Resta l'eventuale
+Opzione A (riuso UI estensione) e, prima del rilascio agli utenti, un test end-to-end su
+dispositivi reali (incl. tempi Argon2id e `navigator.storage.persist()`).

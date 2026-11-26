@@ -14,9 +14,10 @@ sicurezza prima di qualunque rilascio).
 |---|---|
 | `src/app.tsx` | UI Preact: setup → accesso → sblocco → lista (read-only) + auto-lock |
 | `src/session.ts` | Vault sbloccato **solo in RAM**; login OPAQUE, unlock online/offline, lock, logout+wipe |
-| `src/offlineFetch.ts` | `fetch` iniettato nell'Api: cache delle GET in whitelist, fallback offline |
+| `src/offlineFetch.ts` | `fetch` iniettato nell'Api: cache delle GET in whitelist, fallback offline, **cifratura a riposo (H2)** |
+| `src/cacheCrypto.ts` | **H2**: `deriveCacheKey` (WebCrypto HKDF) + `sealBody`/`openBody` (AES-GCM) per cifrare le voci di cache |
 | `src/cachePolicy.ts` | whitelist `isCacheable` (copia da `mobile/`; a regime spostarla in `packages/client`) |
-| `src/db.ts` | IndexedDB: solo ciphertext + bundle avvolto + settings non segreti |
+| `src/db.ts` | IndexedDB: solo ciphertext (voci cifrate tranne `/me`) + settings non segreti |
 | `src/sw.ts` | service worker: solo shell, **non tocca `/api`** |
 | `static/` | `index.html`, `manifest.webmanifest`, `styles.css`, `icon.svg` |
 
@@ -54,3 +55,6 @@ con `npm run build -w pwa` nel pipeline di deploy.
 - Il service worker **non intercetta `/api`**: non può salvare risposte con header di auth.
 - Auto-lock (default 5 min) → `vault.lock()` azzera la RAM. Logout → `wipeAll()` svuota IndexedDB.
 - Argon2id con `me.kdfParams` (gli stessi del server): nessun downgrade dei parametri.
+- **H2**: le voci di cache (tranne `/me`) sono cifrate a riposo con AES-GCM; la `cacheKey`
+  (HKDF sul materiale di chiave del Vault) vive solo in RAM, non estraibile, azzerata a
+  lock/logout. La PII di rubrica/metadati non è più in chiaro su disco.
