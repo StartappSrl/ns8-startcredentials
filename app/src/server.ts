@@ -169,7 +169,9 @@ export async function buildApp(cfg: Config, db: Db, opts: { mailer?: Mailer } = 
   // Lettura pigra con cache in memoria: se la build non c'è, la rotta risponde 404 e
   // il server parte lo stesso. Script e stili solo da 'self'; nessuna risorsa esterna.
   const PWA_CSP =
-    "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self'; connect-src 'self'; " +
+    // 'wasm-unsafe-eval' is required for libsodium's WebAssembly build (Vault.unlock / OPAQUE).
+    // It permits WebAssembly.compile/instantiate ONLY — it does NOT enable JS eval() or new Function().
+    "default-src 'none'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self'; img-src 'self'; connect-src 'self'; " +
     "manifest-src 'self'; worker-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'none'";
   const pwaCache = new Map<string, Buffer>();
   const pwaRead = (name: string): Buffer | null => {

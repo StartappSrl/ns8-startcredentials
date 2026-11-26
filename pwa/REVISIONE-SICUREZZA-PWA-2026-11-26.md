@@ -112,3 +112,37 @@ decifra, chiave deterministica, chiave errata e ciphertext manomesso che fallisc
 Con H2 implementata e rivista, i tre hardening H1–H3 e H2 sono **chiusi**. Resta l'eventuale
 Opzione A (riuso UI estensione) e, prima del rilascio agli utenti, un test end-to-end su
 dispositivi reali (incl. tempi Argon2id e `navigator.storage.persist()`).
+
+---
+
+## Addendum Fase 3 (26/11) — fix CSP per WASM di libsodium/OPAQUE · Esito: **nessun bloccante**
+
+**Difetto trovato nel test su dispositivo reale.** Dallo smartphone lo sblocco falliva con:
+`WebAssembly.compile(): ... 'unsafe-eval' is not an allowed source of script ... "script-src 'self'"`.
+La CSP stretta della rotta `/m` (`script-src 'self'`) impediva la compilazione dei **moduli
+WebAssembly** di libsodium (Argon2id/X25519/Ed25519) e di `@serenity-kit/opaque` (login OPAQUE):
+la PWA caricava l'app-shell ma la crittografia non si inizializzava → accesso impossibile.
+
+**Fix** (`app/src/server.ts`, solo `PWA_CSP`): `script-src 'self'` → `script-src 'self' 'wasm-unsafe-eval'`.
+
+**Analisi di sicurezza del delta**
+- `'wasm-unsafe-eval'` è la source **specifica per WebAssembly**: abilita **solo**
+  `WebAssembly.compile/instantiate`. **Non** riabilita `eval()`, `new Function()`,
+  `setTimeout(string)` né lo script inline — quelli richiedono `'unsafe-eval'`/`'unsafe-inline'`,
+  che **restano bloccati**. È quindi **strettamente più stretta** di `'unsafe-eval'`.
+- **Nessun nuovo vettore XSS**: `script-src` resta limitato a `'self'` (niente origini esterne,
+  niente inline). Un eventuale script iniettato è già bloccato come prima; questa source permette
+  soltanto allo script di stessa origine di compilare i **byte WASM impacchettati nel bundle**.
+- **Verificato che `'unsafe-eval'` NON serve**: il bundle contiene un glue wasm-bindgen
+  (`__wbg_new_no_args` → `new Function`) dentro `@serenity-kit/opaque`. Test locale servendo i due
+  moduli sotto la CSP esatta ed eseguendo un `opaque.client.startLogin` reale: entrambi i WASM si
+  inizializzano e il login parte **senza alcuna violazione CSP** → quel `new Function` è codice morto,
+  non invocato a runtime. Basta quindi `'wasm-unsafe-eval'`.
+- `SEND_CSP` (rotta `/send`) **non è toccata**: resta `script-src 'self'` perché non usa WASM.
+- Il **service worker** usa solo WebCrypto nativo (AES-GCM/HKDF), nessun WASM né eval →
+  `worker-src 'self'` invariato.
+- È la CSP raccomandata e standard per qualunque app che distribuisce crittografia WASM
+  (compatibile con Chrome 97+, Firefox 102+, Safari 16.4+).
+
+**Verifica**: typecheck backend pulito; harness locale (libsodium + OPAQUE sotto la CSP del fix)
+→ `startLogin` eseguito, zero errori di console/CSP.
