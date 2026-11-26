@@ -150,7 +150,8 @@ npm run test:site -w extension       # riconoscimento dell'estensione sulla pagi
 
 ## Stato
 
-Versione 0.7.15. Fasi 0, 1 e 2 implementate e testate; l'app mobile (fase 3) non
-è ancora iniziata. Prima dell'uso in produzione servono un
+Versione 0.8.0. Fasi 0, 1 e 2 implementate e testate. Prima dell'uso in produzione servono un
 penetration test esterno e una revisione indipendente della crittografia.
-L'app mobile (fase 3) userà `packages/crypto` e `packages/client`.
+Oltre all'app mobile nativa in `mobile/`, è disponibile una web-app mobile (PWA)
+installabile servita sotto `/m/` con lettura offline (vedi `pwa/` e
+`PWA-MOBILE-SCOPING-2026-11-26.md`).
