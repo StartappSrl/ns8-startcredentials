@@ -41,3 +41,20 @@ ul.list li .name { flex: 1; font-weight: 500; overflow: hidden; text-overflow: e
 ul.list li .count { color: var(--muted); font-size: .85rem; }
 ul.list li .type { font-size: .65rem; text-transform: uppercase; color: var(--accent); background: #16224a; padding: .15rem .4rem; border-radius: .35rem; flex: none; }
 ul.list li .sub { color: var(--muted); font-size: .8rem; }
+ul.list li { cursor: pointer; }
+ul.list li .chev { color: var(--muted); flex: none; font-size: 1.1rem; }
+
+/* Dettaglio elemento */
+.detail { display: flex; flex-direction: column; gap: .9rem; }
+.field { border-bottom: 1px solid var(--line); padding-bottom: .7rem; }
+.field-label { color: var(--muted); font-size: .72rem; text-transform: uppercase; letter-spacing: .03em; margin-bottom: .3rem; }
+.field-row { display: flex; align-items: center; gap: .5rem; flex-wrap: wrap; }
+.field-val { flex: 1 1 auto; min-width: 0; word-break: break-word; }
+.field-val.mono { font-family: ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace; }
+.field-val.secret { letter-spacing: .08em; }
+.field-val.totp { font-size: 1.35rem; letter-spacing: .12em; color: var(--accent); }
+.field-val.notes { white-space: pre-wrap; color: var(--fg); }
+.field-val.link-a { color: var(--accent); text-decoration: none; }
+.totp-left { color: var(--muted); font-size: .8rem; flex: none; min-width: 2.2rem; text-align: right; }
+.chip { background: #16224a; color: var(--accent); font-size: .78rem; padding: .32rem .6rem; border-radius: .45rem; flex: none; }
+.chip:active { opacity: .7; }

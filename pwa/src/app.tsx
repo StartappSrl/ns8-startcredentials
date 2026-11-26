@@ -9,6 +9,8 @@
 import { render } from "preact";
 import { useEffect, useState } from "preact/hooks";
 import type { Container, Item, Vault } from "@startcredentials/client";
+import { effectiveTotpUri } from "@startcredentials/client";
+import { generateTotp, parseOtpauthUri } from "@startcredentials/crypto";
 import { ApiError, getSettings, saveSettings, session, SessionError } from "./session.js";
 import { requestPersistence } from "./db.js";
 
@@ -275,10 +277,14 @@ function Main({ vault, offline }: { vault: Vault; offline: boolean }) {
 
 function ContainerView({ vault, container, offline, onBack }: { vault: Vault; container: Container; offline: boolean; onBack: () => void }) {
   const [items, setItems] = useState<Item[] | null>(null);
+  const [open, setOpen] = useState<Item | null>(null);
   const [err, setErr] = useState<string | null>(null);
   useEffect(() => {
     vault.items(container.id).then(setItems).catch((e) => setErr((e as Error).message));
   }, [container.id]);
+
+  if (open) return <ItemDetail item={open} offline={offline} onBack={() => setOpen(null)} />;
+
   return (
     <div class="app">
       <header>
@@ -292,14 +298,124 @@ function ContainerView({ vault, container, offline, onBack }: { vault: Vault; co
       ) : (
         <ul class="list">
           {[...items].sort((a, b) => a.data.name.localeCompare(b.data.name, "it", { sensitivity: "base" })).map((it) => (
-            <li key={it.id}>
+            <li key={it.id} onClick={() => setOpen(it)}>
               <span class="type">{it.type}</span>
               <span class="name">{it.data.name || "—"}</span>
               <span class="sub">{it.data.username ?? ""}</span>
+              <span class="chev">›</span>
             </li>
           ))}
         </ul>
       )}
+    </div>
+  );
+}
+
+/** Pulsante "copia" con conferma; usa la clipboard solo su gesto dell'utente. */
+function CopyBtn({ value, label = "Copia" }: { value: string; label?: string }) {
+  const [done, setDone] = useState(false);
+  const copy = async () => {
+    try {
+      await navigator.clipboard.writeText(value);
+      setDone(true);
+      setTimeout(() => setDone(false), 1500);
+    } catch { /* clipboard non disponibile (contesto non sicuro o permesso negato) */ }
+  };
+  return <button type="button" class="chip" onClick={copy}>{done ? "Copiato ✓" : label}</button>;
+}
+
+function Field({ label, value, mono, children }: { label: string; value?: string; mono?: boolean; children?: preact.ComponentChildren }) {
+  return (
+    <div class="field">
+      {label && <div class="field-label">{label}</div>}
+      <div class="field-row">
+        {value !== undefined && <span class={mono ? "field-val mono" : "field-val"}>{value}</span>}
+        {children}
+      </div>
+    </div>
+  );
+}
+
+/** Campo segreto: nascosto di default, si rivela su richiesta e si può copiare. */
+function SecretField({ label, value }: { label: string; value: string }) {
+  const [show, setShow] = useState(false);
+  return (
+    <div class="field">
+      <div class="field-label">{label}</div>
+      <div class="field-row">
+        <span class="field-val mono secret">{show ? value : "•".repeat(Math.min(14, Math.max(8, value.length)))}</span>
+        <button type="button" class="chip" onClick={() => setShow((v) => !v)}>{show ? "Nascondi" : "Mostra"}</button>
+        <CopyBtn value={value} />
+      </div>
+    </div>
+  );
+}
+
+/** Codice OTP (2FA) calcolato in locale, aggiornato ogni secondo. */
+function TotpField({ uri }: { uri: string }) {
+  const [state, setState] = useState<{ code: string; secondsLeft: number } | null>(null);
+  const [errored, setErrored] = useState(false);
+  useEffect(() => {
+    let alive = true;
+    let params: ReturnType<typeof parseOtpauthUri>;
+    try { params = parseOtpauthUri(uri); } catch { setErrored(true); return; }
+    const tick = async () => {
+      try { const r = await generateTotp(params); if (alive) setState(r); }
+      catch { if (alive) setErrored(true); }
+    };
+    void tick();
+    const id = setInterval(() => void tick(), 1000);
+    return () => { alive = false; clearInterval(id); };
+  }, [uri]);
+  if (errored) return null;
+  const pretty = state && state.code.length === 6 ? `${state.code.slice(0, 3)} ${state.code.slice(3)}` : state?.code ?? "…";
+  return (
+    <div class="field">
+      <div class="field-label">Codice OTP (2FA)</div>
+      <div class="field-row">
+        <span class="field-val mono totp">{pretty}</span>
+        {state && <span class="totp-left">{state.secondsLeft}s</span>}
+        {state && <CopyBtn value={state.code} />}
+      </div>
+    </div>
+  );
+}
+
+/** Dettaglio di un elemento in sola lettura: rivela/copia password, OTP, campi. */
+function ItemDetail({ item, offline, onBack }: { item: Item; offline: boolean; onBack: () => void }) {
+  const d = item.data;
+  const totpUri = effectiveTotpUri(d);
+  return (
+    <div class="app">
+      <header>
+        <button class="link" onClick={onBack}>‹ Indietro</button>
+        <strong>{d.name || "—"}</strong>
+        {offline && <span class="badge">offline</span>}
+      </header>
+      <div class="detail">
+        {d.username && (
+          <Field label="Nome utente" value={d.username} mono><CopyBtn value={d.username} /></Field>
+        )}
+        {d.password && <SecretField label="Password" value={d.password} />}
+        {totpUri && <TotpField uri={totpUri} />}
+        {(d.urls ?? []).filter(Boolean).map((u, i) => (
+          <Field key={`u${i}`} label={i === 0 ? "Indirizzo" : ""}>
+            <a class="field-val link-a" href={u} target="_blank" rel="noopener noreferrer">{u}</a>
+            <CopyBtn value={u} />
+          </Field>
+        ))}
+        {(d.fields ?? []).filter((f) => f.value).map((f, i) => (
+          f.secret
+            ? <SecretField key={`f${i}`} label={f.label || "Campo"} value={f.value} />
+            : <Field key={`f${i}`} label={f.label || "Campo"} value={f.value}><CopyBtn value={f.value} /></Field>
+        ))}
+        {d.notes && (
+          <Field label="Note"><span class="field-val notes">{d.notes}</span></Field>
+        )}
+        {!d.password && !totpUri && !d.username && !(d.notes) && !(d.fields?.length) && (
+          <p class="muted">Nessun dettaglio da mostrare.</p>
+        )}
+      </div>
     </div>
   );
 }
