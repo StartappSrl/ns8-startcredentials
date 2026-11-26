@@ -193,6 +193,7 @@ export function Clients({ vault, containers, reload, shared }: { vault: Vault; c
   if (filter === "manage") list = list.filter((c) => c.permission === "manage");
   if (filter === "otp") list = list.filter((c) => c.totpItems > 0);
   if (filter === "recent") list = [...list].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)).slice(0, 12);
+  else list = [...list].sort((a, b) => a.meta.name.localeCompare(b.meta.name, "it", { sensitivity: "base" }));
   return (
     <>
       <div class="row">
@@ -579,7 +580,7 @@ export function ContainerView({ vault, id, focusItem, onChanged }: { vault: Vaul
       const s = q.toLowerCase();
       l = l.filter((i) => [i.data.name, i.data.username, ...(i.data.urls ?? []), i.data.notes].some((v) => v?.toLowerCase().includes(s)));
     }
-    return l;
+    return [...l].sort((a, b) => a.data.name.localeCompare(b.data.name, "it", { sensitivity: "base" }));
   }, [items.data, tab, q]);
 
   if (info.error) return <ErrorNote error={info.error} />;
