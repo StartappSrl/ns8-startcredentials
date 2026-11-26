@@ -19,6 +19,9 @@ type Phase =
   | { p: "unlock" }
   | { p: "ready" };
 
+/** Nome mostrato di un contenitore, usato anche come chiave di ordinamento. */
+const containerLabel = (c: Container) => c.meta.name || (c.kind === "personal" ? "Personale" : "Senza nome");
+
 function App() {
   const [phase, setPhase] = useState<Phase>({ p: "loading" });
   const [offline, setOffline] = useState<boolean>(!navigator.onLine);
@@ -211,10 +214,10 @@ function Main({ vault, offline }: { vault: Vault; offline: boolean }) {
         <p class="muted">Decifratura…</p>
       ) : (
         <ul class="list">
-          {containers.map((c) => (
+          {[...containers].sort((a, b) => containerLabel(a).localeCompare(containerLabel(b), "it", { sensitivity: "base" })).map((c) => (
             <li key={c.id} onClick={() => setOpen(c)}>
               <span class="dot" style={{ background: c.meta.color ?? "#888" }} />
-              <span class="name">{c.meta.name || (c.kind === "personal" ? "Personale" : "Senza nome")}</span>
+              <span class="name">{containerLabel(c)}</span>
               <span class="count">{c.items}</span>
             </li>
           ))}
@@ -242,7 +245,7 @@ function ContainerView({ vault, container, offline, onBack }: { vault: Vault; co
         <p class="muted">Decifratura…</p>
       ) : (
         <ul class="list">
-          {items.map((it) => (
+          {[...items].sort((a, b) => a.data.name.localeCompare(b.data.name, "it", { sensitivity: "base" })).map((it) => (
             <li key={it.id}>
               <span class="type">{it.type}</span>
               <span class="name">{it.data.name || "—"}</span>
