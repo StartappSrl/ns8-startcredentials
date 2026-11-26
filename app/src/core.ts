@@ -2,7 +2,7 @@
  * Infrastruttura del server: configurazione, database, errori HTTP,
  * token, cifratura dei segreti MFA, rate limiting e registro di audit.
  */
-import { createCipheriv, createDecipheriv, createHash, createHmac, randomBytes, timingSafeEqual } from "node:crypto";
+import { createCipheriv, createDecipheriv, createHmac, randomBytes, timingSafeEqual } from "node:crypto";
 import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import pg from "pg";
@@ -26,6 +26,7 @@ export interface Config {
   trustedDeviceDays?: number;
   /** Mesi di conservazione del registro di audit (0 = senza limite). */
   auditRetentionMonths?: number;
+  trustProxy?: string;
   /** Tentativi di autenticazione al minuto per indirizzo IP. */
   authPerIpPerMinute?: number;
   /** Tentativi al minuto per singolo utente o codice (login, MFA, inviti). */
@@ -47,6 +48,9 @@ export function loadConfig(env = process.env): Config {
   };
   const secret = Buffer.from(need("SERVER_SECRET"), "base64");
   if (secret.length !== 32) throw new Error("SERVER_SECRET deve essere di 32 byte in base64");
+  // La catena di hash del registro va firmata con questa chiave (vedi auditHash):
+  // senza, chi scrive sul database potrebbe ricalcolarla e riscrivere la storia.
+  setAuditSecret(secret);
   const host = env.STARTCREDENTIALS_HOST;
   return {
     databaseUrl: need("DATABASE_URL"),
@@ -58,6 +62,7 @@ export function loadConfig(env = process.env): Config {
     maxAttachmentBytes: Number(env.MAX_ATTACHMENT_MB ?? 50) * 1024 * 1024,
     sessionHours: Number(env.SESSION_HOURS ?? 12),
     auditRetentionMonths: Number(env.AUDIT_RETENTION_MONTHS ?? 24),
+    trustProxy: env.TRUST_PROXY ?? "127.0.0.1",
     trustedDeviceDays: Math.max(0, Math.min(90, Number(env.TRUSTED_DEVICE_DAYS ?? 30))),
     minPasswordLength: Math.max(12, Math.min(64, Number(env.MIN_PASSWORD_LENGTH) || 12)),
     secureSend: {
@@ -270,12 +275,22 @@ function stable(v: unknown): string {
   return JSON.stringify(v ?? null);
 }
 
+// Chiave della catena del registro, impostata da loadConfig() all'avvio.
+let auditSecret: Buffer | null = null;
+export function setAuditSecret(secret: Buffer): void {
+  auditSecret = secret;
+}
+
 function auditHash(prev: string, at: string, e: AuditEvent): string {
+  // HMAC, non SHA-256 "nudo": gli ingressi sono tutti colonne della riga e la
+  // canonicalizzazione è pubblica, quindi senza chiave chiunque scriva sul
+  // database potrebbe ricalcolare la catena e nascondere o troncare eventi.
+  if (!auditSecret) throw new Error("setAuditSecret non chiamata: catena del registro non inizializzata");
   const canonical = stable([
     prev, at, e.actorId ?? null, e.action, e.targetType ?? null, e.targetId ?? null,
     e.containerId ?? null, e.ip ?? null, e.details ?? {},
   ]);
-  return createHash("sha256").update(canonical).digest("hex");
+  return createHmac("sha256", auditSecret).update(canonical).digest("hex");
 }
 
 /** Aggiunge una riga alla catena di hash. Va chiamata dentro una transazione. */
@@ -324,4 +339,30 @@ export async function verifyAuditChain(db: Db): Promise<{ ok: boolean; rows: num
     prev = row.hash;
   }
   return { ok: true, rows: r.rowCount ?? 0, prunedUpTo: a?.id };
+}
+
+/**
+ * Ricalcola la catena del registro con la chiave HMAC attuale. Uso UNA TANTUM
+ * all'aggiornamento da una versione che firmava la catena con SHA-256 non
+ * firmato: quelle righe non verificherebbero più con la nuova chiave. Su una
+ * nuova installazione non serve. Va eseguita una sola volta, in una finestra
+ * fidata (non dopo una sospetta manomissione: ri-baserebbe anche le modifiche).
+ */
+export async function rebaseAuditChain(db: Db): Promise<number> {
+  return tx(db, async (c) => {
+    await c.query("SELECT pg_advisory_xact_lock(7123001)");
+    const anchor = await getSetting(c, "audit_anchor");
+    let prev = anchor ? (JSON.parse(anchor) as { hash: string }).hash : "genesis";
+    const r = await c.query("SELECT * FROM audit_log ORDER BY id");
+    for (const row of r.rows) {
+      const at = new Date(row.at).toISOString();
+      const hash = auditHash(prev, at, {
+        actorId: row.actor_id, action: row.action, targetType: row.target_type ?? undefined,
+        targetId: row.target_id ?? undefined, containerId: row.container_id, ip: row.ip ?? undefined, details: row.details,
+      });
+      await c.query("UPDATE audit_log SET prev_hash = $2, hash = $3 WHERE id = $1", [row.id, prev, hash]);
+      prev = hash;
+    }
+    return r.rowCount ?? 0;
+  });
 }

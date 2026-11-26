@@ -386,6 +386,13 @@ export async function containerRoutes(app: FastifyInstance, ctx: Ctx) {
       if (!r.rowCount) throw notFound("member_not_found");
       // Chi esce dal cliente perde anche la designazione d'emergenza, e quelle che aveva creato non valgono più.
       await c.query("DELETE FROM emergency_access WHERE container_id = $1 AND (user_id = $2 OR created_by = $2)", [id, userId]);
+      // ...e anche le condivisioni di singoli elementi: altrimenti la chiave
+      // dell'elemento, sigillata direttamente a lui, resta leggibile anche dopo
+      // la rimozione e la rotazione del cliente (che non cambia ik_version).
+      // Gli elementi che gli erano condivisi vanno ri-cifrati (nuova ik_version):
+      // solo così la chiave dell'elemento che aveva non apre più i dati.
+      await c.query("UPDATE items SET rekey_required = true WHERE container_id = $1 AND id IN (SELECT item_id FROM item_shares WHERE user_id = $2)", [id, userId]);
+      await c.query("DELETE FROM item_shares WHERE user_id = $2 AND item_id IN (SELECT id FROM items WHERE container_id = $1)", [id, userId]);
       // Se il client non completa la rotazione, la farà il prossimo gestore.
       await c.query("UPDATE containers SET rotation_required = true WHERE id = $1", [id]);
       await audit(c, { actorId: a.id, action: "container.member_removed", targetType: "user", targetId: userId, containerId: id, ip: req.ip });
@@ -416,23 +423,36 @@ export async function containerRoutes(app: FastifyInstance, ctx: Ctx) {
       if (body.newKeyVersion !== p.keyVersion + 1) throw conflict("stale_key_version");
       const members = await c.query("SELECT user_id, permission FROM container_keys k WHERE k.container_id = $1 AND k.key_version = $2 AND (k.expires_at IS NULL OR k.expires_at > now())", [id, p.keyVersion]);
       const expected = new Map(members.rows.map((m) => [m.user_id as string, m.permission as string]));
-      if (body.grants.length !== expected.size) throw badRequest("grants_must_match_members");
+      // Uguaglianza degli INSIEMI, non delle lunghezze: controllare solo il
+      // numero permetteva di duplicare una consegna e ometterne un'altra
+      // (insertGrant è un UPSERT), togliendo accesso a un membro senza traccia
+      // nel registro e potendo lasciare il cliente senza gestori.
+      const seenGrants = new Set<string>();
       for (const g of body.grants) {
+        if (seenGrants.has(g.recipientId)) throw badRequest("duplicate_grant");
+        seenGrants.add(g.recipientId);
         if (g.containerId !== id || g.keyVersion !== body.newKeyVersion || expected.get(g.recipientId) !== g.permission) {
           throw badRequest("grants_must_match_members");
         }
         await insertGrant(c, g, a.id);
       }
+      if (seenGrants.size !== expected.size) throw badRequest("grants_must_match_members");
       const groupRows = await c.query("SELECT group_id, permission FROM container_group_keys WHERE container_id = $1 AND key_version = $2", [id, p.keyVersion]);
       const expectedGroups = new Map(groupRows.rows.map((g) => [g.group_id as string, g.permission as string]));
-      if (body.groupGrants.length !== expectedGroups.size) throw badRequest("group_grants_must_match");
       if (body.grants.length + body.groupGrants.length === 0) throw badRequest("no_members");
+      const seenGroups = new Set<string>();
       for (const g of body.groupGrants) {
+        if (seenGroups.has(g.groupId)) throw badRequest("duplicate_group_grant");
+        seenGroups.add(g.groupId);
         if (g.containerId !== id || g.keyVersion !== body.newKeyVersion || expectedGroups.get(g.groupId) !== g.permission) {
           throw badRequest("group_grants_must_match");
         }
         await insertGroupGrant(c, g, a.id);
       }
+      if (seenGroups.size !== expectedGroups.size) throw badRequest("group_grants_must_match");
+      // Difesa in profondità: la rotazione non deve lasciare il cliente senza
+      // gestori (l'uguaglianza degli insiemi qui sopra già lo preserva).
+      if (![...expected.values(), ...expectedGroups.values()].includes("manage")) throw conflict("last_manager");
       const items = await c.query("SELECT id FROM items WHERE container_id = $1", [id]);
       const sent = new Map(body.items.map((i) => [i.id, i.ikEnc]));
       if (sent.size !== items.rowCount || items.rows.some((r) => !sent.has(r.id))) throw badRequest("items_must_match");

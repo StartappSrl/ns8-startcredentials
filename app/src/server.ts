@@ -5,7 +5,7 @@ import { fileURLToPath } from "node:url";
 import { ZodError } from "zod";
 import * as opaque from "@serenity-kit/opaque";
 import { initCrypto } from "@startcredentials/crypto";
-import { Config, Db, getSetting, HttpError, RateLimiter, setSetting, tokenHash, unauthorized, forbidden } from "./core.js";
+import { Config, Db, getSetting, HttpError, RateLimiter, setAuditSecret, setSetting, tokenHash, unauthorized, forbidden } from "./core.js";
 import { authRoutes } from "./routes/auth.js";
 import { userRoutes } from "./routes/users.js";
 import { containerRoutes } from "./routes/containers.js";
@@ -47,6 +47,8 @@ export const APP_ROOT = join(here, "..", "..");
 export const VERSION = JSON.parse(readFileSync(join(APP_ROOT, "package.json"), "utf8")).version as string;
 
 export async function buildApp(cfg: Config, db: Db, opts: { mailer?: Mailer } = {}): Promise<FastifyInstance> {
+  // Firma la catena del registro con il segreto del server (vedi auditHash).
+  setAuditSecret(cfg.serverSecret);
   await initCrypto();
   await opaque.ready;
 
@@ -73,7 +75,9 @@ export async function buildApp(cfg: Config, db: Db, opts: { mailer?: Mailer } = 
   const app = Fastify({
     logger: process.env.NODE_ENV === "test" ? false : { level: "info", redact: ["req.headers.authorization"] },
     bodyLimit: 20 * 1024 * 1024,
-    trustProxy: "127.0.0.1",
+    // Fissare all'hop reale del proxy del deploy (env TRUST_PROXY): se il proxy
+    // non raggiunge l'app da loopback, i limiti per-IP perdono l'attribuzione.
+    trustProxy: cfg.trustProxy ?? "127.0.0.1",
   });
 
   ctx.mailer = opts.mailer ?? createMailer(cfg, (e) => app.log.error({ err: e, smtpHost: cfg.smtp?.host, from: cfg.smtp?.from }, "Invio email non riuscito"));

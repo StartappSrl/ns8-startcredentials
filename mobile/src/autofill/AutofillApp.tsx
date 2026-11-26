@@ -16,6 +16,15 @@ import { color, mono } from "../theme";
 
 type Row = { item: Item; where: string; canWrite: boolean };
 
+/**
+ * Indirizzo di associazione di un'app. SICUREZZA: quando il servizio ha
+ * verificato la firma del chiamante la leghiamo (androidapp://pkg@firma), così
+ * un APK ricompilato con lo stesso pacchetto ma firma diversa non combacia.
+ * Senza firma (API vecchie o lettura fallita) si ricade sulla forma legacy.
+ */
+const appUrl = (pkg: string, cert?: string | null) =>
+  cert ? `androidapp://${pkg}@${cert}` : `androidapp://${pkg}`;
+
 const msg = (e: unknown) => {
   const err = e as EngineError;
   if (err.code === "invalid_credentials") return "Email o master password non corretti.";
@@ -62,7 +71,7 @@ function Flow() {
     if (req.mode === "save") return prepareSave();
     const found = req.webDomain
       ? await engine.call<Row[]>("lookup", `https://${req.webDomain}`)
-      : req.packageName ? await engine.call<Row[]>("lookupApp", req.packageName) : [];
+      : req.packageName ? await engine.call<Row[]>("lookupApp", req.packageName, req.callerCert) : [];
     setMatches(found);
     setStage("pick");
     if (!found.length) setAll(await engine.call<Row[]>("allItems"));
@@ -72,7 +81,7 @@ function Flow() {
   const prepareSave = async () => {
     const found = req.webDomain
       ? await engine.call<Row[]>("lookup", `https://${req.webDomain}`)
-      : req.packageName ? await engine.call<Row[]>("lookupApp", req.packageName) : [];
+      : req.packageName ? await engine.call<Row[]>("lookupApp", req.packageName, req.callerCert) : [];
     setExisting(found.find((r) => r.canWrite && (r.item.data.username ?? "") === (save?.username ?? "")) ?? null);
     const cs = await engine.call<{ id: string; kind: string; permission: string; meta: { name: string } }[]>("containers");
     const w = cs.filter((c) => c.kind !== "org" && c.permission !== "read").map((c) => ({ id: c.id, name: c.kind === "personal" ? "Area personale" : c.meta.name }));
@@ -90,7 +99,7 @@ function Flow() {
         await engine.call("updateItem", existing.item.id, { ...existing.item.data, password: save.password });
       } else {
         if (!saveTarget) throw new Error("Nessun cliente in cui puoi salvare.");
-        const url = req.webDomain ? `https://${req.webDomain}` : `androidapp://${req.packageName}`;
+        const url = req.webDomain ? `https://${req.webDomain}` : appUrl(req.packageName!, req.callerCert);
         await engine.call("createItem", saveTarget, { type: "login", name: saveName.trim() || target, username: save.username || undefined, password: save.password, urls: [url] }, null);
       }
       Autofill.finish();
@@ -159,7 +168,7 @@ function Flow() {
   const fill = async (r: Row, associate: boolean) => {
     try {
       if (associate && req.packageName) {
-        await engine.call("updateItem", r.item.id, { ...r.item.data, urls: [...(r.item.data.urls ?? []), `androidapp://${req.packageName}`] });
+        await engine.call("updateItem", r.item.id, { ...r.item.data, urls: [...(r.item.data.urls ?? []), appUrl(req.packageName, req.callerCert)] });
       }
       let otp: string | undefined;
       if (req.kinds?.includes("otp")) {

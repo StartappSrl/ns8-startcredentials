@@ -189,6 +189,9 @@ export async function userRoutes(app: FastifyInstance, ctx: Ctx) {
       if (body.status) await c.query("UPDATE users SET status = $2 WHERE id = $1", [id, body.status]);
       if (body.role) await c.query("UPDATE users SET role = $2 WHERE id = $1", [id, body.role]);
       if (body.status === "suspended" || body.role === "user") await c.query("DELETE FROM sessions WHERE user_id = $1", [id]);
+      // La sospensione revoca anche i dispositivi attendibili: alla
+      // riattivazione non devono poter saltare di nuovo l'MFA (come fa offboard).
+      if (body.status === "suspended") await c.query("UPDATE trusted_devices SET revoked_at = now() WHERE user_id = $1 AND revoked_at IS NULL", [id]);
       if (body.role === "user") {
         // Un ex amministratore perde l'accesso alla chiave dell'organizzazione.
         await c.query("DELETE FROM container_keys WHERE user_id = $1 AND container_id = (SELECT container_id FROM org WHERE id = 1)", [id]);

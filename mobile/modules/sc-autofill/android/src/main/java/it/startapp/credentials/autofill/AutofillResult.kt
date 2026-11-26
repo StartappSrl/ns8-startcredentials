@@ -36,6 +36,8 @@ object AutofillResult {
       "webDomain" to intent.getStringExtra(ScAutofillService.EXTRA_DOMAIN),
       "packageName" to pkg,
       "appLabel" to label,
+      // Firma verificata del chiamante: serve a legare l'associazione dell'app.
+      "callerCert" to intent.getStringExtra(ScAutofillService.EXTRA_CERT),
     )
   }
 
@@ -69,7 +71,7 @@ object AutofillResult {
       }
     }
     if (!any) return false
-    RecentFill.remember(intent.getStringExtra(ScAutofillService.EXTRA_DOMAIN), intent.getStringExtra(ScAutofillService.EXTRA_PACKAGE), label, values)
+    RecentFill.remember(intent.getStringExtra(ScAutofillService.EXTRA_DOMAIN), intent.getStringExtra(ScAutofillService.EXTRA_PACKAGE), intent.getStringExtra(ScAutofillService.EXTRA_CERT), label, values)
     val result = Intent().putExtra(AutofillManager.EXTRA_AUTHENTICATION_RESULT, builder.build())
     activity.runOnUiThread {
       activity.setResult(Activity.RESULT_OK, result)
