@@ -22,7 +22,7 @@
   },
   "devDependencies": {
     "@startcredentials/client": "0.9.4",
-    "@types/node": "22.10.2",
+    "@types/node": "26.6.6",
     "@types/nodemailer": "8.0.2",
     "@types/pg": "8.11.10",
     "typescript": "5.7.2"
