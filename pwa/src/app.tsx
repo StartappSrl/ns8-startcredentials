@@ -16,6 +16,7 @@ type Phase =
   | { p: "loading" }
   | { p: "setup" }
   | { p: "signin"; canLocal: boolean }
+  | { p: "mfa" }
   | { p: "unlock" }
   | { p: "ready" };
 
@@ -52,7 +53,9 @@ function App() {
     case "setup":
       return <Setup onDone={() => void decide()} />;
     case "signin":
-      return <SignIn canLocal={phase.canLocal} onUnlocked={() => setPhase({ p: "ready" })} onLocal={() => setPhase({ p: "unlock" })} />;
+      return <SignIn canLocal={phase.canLocal} onUnlocked={() => setPhase({ p: "ready" })} onMfa={() => setPhase({ p: "mfa" })} onLocal={() => setPhase({ p: "unlock" })} />;
+    case "mfa":
+      return <Mfa onUnlocked={() => setPhase({ p: "ready" })} onCancel={() => { session.cancelMfa(); void decide(); }} />;
     case "unlock":
       return <UnlockLocal onUnlocked={() => setPhase({ p: "ready" })} onBack={() => void decide()} />;
     case "ready":
@@ -104,7 +107,7 @@ function Setup({ onDone }: { onDone: () => void }) {
   );
 }
 
-function SignIn({ canLocal, onUnlocked, onLocal }: { canLocal: boolean; onUnlocked: () => void; onLocal: () => void }) {
+function SignIn({ canLocal, onUnlocked, onMfa, onLocal }: { canLocal: boolean; onUnlocked: () => void; onMfa: () => void; onLocal: () => void }) {
   const [email, setEmail] = useState("");
   const [pw, setPw] = useState("");
   const [err, setErr] = useState<string | null>(null);
@@ -115,9 +118,10 @@ function SignIn({ canLocal, onUnlocked, onLocal }: { canLocal: boolean; onUnlock
     setErr(null);
     setBusy(true);
     try {
-      await session.signIn(email.trim(), pw);
+      const r = await session.signIn(email.trim(), pw);
+      setPw(""); // la password non serve più qui: per l'MFA è tenuta in RAM dalla sessione
+      if (r === "mfa") return onMfa();
       await requestPersistence();
-      setPw("");
       onUnlocked();
     } catch (e2) {
       setErr(e2 instanceof ApiError ? "Email o master password non corrette." : e2 instanceof SessionError ? e2.message : (e2 as Error).message);
@@ -138,6 +142,48 @@ function SignIn({ canLocal, onUnlocked, onLocal }: { canLocal: boolean; onUnlock
       {canLocal && (
         <button class="link" onClick={onLocal}>Sblocca offline (dati salvati su questo telefono)</button>
       )}
+    </Frame>
+  );
+}
+
+function Mfa({ onUnlocked, onCancel }: { onUnlocked: () => void; onCancel: () => void }) {
+  const [code, setCode] = useState("");
+  const [trust, setTrust] = useState(true);
+  const [err, setErr] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const submit = async (e: Event) => {
+    e.preventDefault();
+    setErr(null);
+    setBusy(true);
+    try {
+      await session.completeMfa(code, trust);
+      setCode("");
+      await requestPersistence();
+      onUnlocked();
+    } catch (e2) {
+      setErr(e2 instanceof ApiError ? "Codice non valido o scaduto." : e2 instanceof SessionError ? e2.message : (e2 as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <Frame title="Codice di verifica">
+      <p class="muted">Inserisci il codice a 6 cifre della tua app di autenticazione. Senza il telefono, usa un codice di riserva.</p>
+      <form onSubmit={submit}>
+        <input
+          inputMode="numeric" autoComplete="one-time-code" autoFocus required
+          pattern="[0-9]{6}|[A-Za-z0-9]{4}-?[A-Za-z0-9]{4}" placeholder="123456"
+          style="text-align:center;letter-spacing:.3em;font-size:1.2rem"
+          value={code} onInput={(e) => setCode((e.target as HTMLInputElement).value)}
+        />
+        <label class="check">
+          <input type="checkbox" checked={trust} onChange={(e) => setTrust((e.target as HTMLInputElement).checked)} />
+          <span>Fidati di questo dispositivo: non chiederà più il codice (solo la master password).</span>
+        </label>
+        <ErrBox error={err} />
+        <button class="primary" disabled={busy}>{busy ? "Verifica…" : "Verifica"}</button>
+      </form>
+      <button class="link" onClick={onCancel}>Annulla</button>
     </Frame>
   );
 }

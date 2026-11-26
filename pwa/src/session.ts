@@ -7,7 +7,7 @@
  *
  * Auto-lock sull'inattività; `logout()` azzera la RAM e cancella la cache offline.
  */
-import { Api, ApiError, login, ready, Vault } from "@startcredentials/client";
+import { Api, ApiError, login, ready, trustDevice, Vault, verifyMfa } from "@startcredentials/client";
 import { makeOfflineFetch, NetState } from "./offlineFetch.js";
 import { deriveCacheKey } from "./cacheCrypto.js";
 import { getCached, getMeta, setMeta, wipeAll } from "./db.js";
@@ -16,7 +16,15 @@ export interface Settings {
   serverUrl?: string;
   email?: string;
   pinnedOrgSignPublic?: string;
+  /** Token "dispositivo attendibile": salta il secondo fattore (non la master password). Solo questo dispositivo. */
+  deviceToken?: string;
   autoLockMinutes: number;
+}
+
+/** Nome del dispositivo mostrato nell'elenco sessioni del server. */
+function deviceName(): string {
+  const m = /(iPhone|iPad|iPod|Android|Macintosh|Windows|Linux)/.exec(navigator.userAgent);
+  return `StartCredentials PWA (${m?.[1] ?? "mobile"})`;
 }
 const DEFAULTS: Settings = { autoLockMinutes: 5 };
 
@@ -36,6 +44,8 @@ class Session {
   private token: string | null = null;
   /** H2: chiave di cifratura della cache, solo in RAM mentre il vault è sbloccato. */
   private cacheKey: CryptoKey | null = null;
+  /** Login con MFA in sospeso: api col token di login + password, solo in RAM tra i due passaggi. */
+  private pending: { api: Api; password: string } | null = null;
   net: NetState = { offline: !navigator.onLine };
   onLock: (() => void) | null = null;
   onNetChange: ((offline: boolean) => void) | null = null;
@@ -49,17 +59,53 @@ class Session {
     return new Api({ baseUrl: s.serverUrl, token: this.token ?? undefined, fetch: makeOfflineFetch(origin, this.net, () => this.cacheKey) });
   }
 
-  /** Accesso online: OPAQUE + sblocco. Lo scheletro gestisce solo lo stato "active". */
-  async signIn(email: string, password: string): Promise<void> {
+  /**
+   * Accesso online: OPAQUE (+ MFA se richiesta) e sblocco.
+   * Ritorna "mfa" se il server chiede il secondo fattore: poi chiamare `completeMfa`.
+   */
+  async signIn(email: string, password: string): Promise<"active" | "mfa"> {
     await ready();
     await saveSettings({ email });
     const api = await this.api();
-    const res = await login(api, email, password);
-    if (res.state !== "active") {
-      throw new SessionError(
-        res.state === "mfa_setup" ? "Questo account richiede la configurazione MFA (non nello scheletro)." : "Serve un codice MFA (non nello scheletro).",
-      );
+    const s = await getSettings();
+    // Un dispositivo già attendibile (deviceToken) salta il codice ma richiede sempre la master password.
+    const res = await login(api, email, password, { deviceToken: s.deviceToken });
+    if (res.state === "mfa_pending") {
+      // Teniamo api (col token di login) e password in RAM per completare dopo il codice.
+      this.pending = { api, password };
+      return "mfa";
     }
+    if (res.state !== "active") {
+      throw new SessionError("Questo account richiede prima la configurazione MFA nell'app completa.");
+    }
+    await this.finishOnline(api, password);
+    return "active";
+  }
+
+  /** Secondo fattore: verifica il codice (TOTP o codice di riserva), opzionalmente fida il dispositivo, poi sblocca. */
+  async completeMfa(code: string, trust: boolean): Promise<void> {
+    const p = this.pending;
+    if (!p) throw new SessionError("Nessun accesso in attesa di codice.");
+    await verifyMfa(p.api, code.trim()); // codice errato → ApiError, `pending` resta per il nuovo tentativo
+    if (trust) {
+      try {
+        const d = await trustDevice(p.api, deviceName());
+        await saveSettings({ deviceToken: d.deviceToken });
+      } catch { /* "dispositivo attendibile" disattivato sul server: si prosegue senza */ }
+    }
+    try {
+      await this.finishOnline(p.api, p.password);
+    } finally {
+      this.pending = null; // via la password dalla RAM
+    }
+  }
+
+  /** Abbandona un accesso in attesa di codice (azzera api+password tenuti in RAM). */
+  cancelMfa(): void {
+    this.pending = null;
+  }
+
+  private async finishOnline(api: Api, password: string): Promise<void> {
     this.token = api.token ?? null;
     const s = await getSettings();
     const vault = await Vault.unlock(api, password, { pinnedOrgSignPublic: s.pinnedOrgSignPublic });
@@ -107,6 +153,7 @@ class Session {
     this.vault = null;
     this.token = null;
     this.cacheKey = null; // H2: via la chiave di cache dalla RAM
+    this.pending = null;  // via eventuale password/api di un MFA interrotto
     this.onLock?.();
   }
 

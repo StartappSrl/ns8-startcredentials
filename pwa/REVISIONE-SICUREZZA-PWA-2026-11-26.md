@@ -146,3 +146,40 @@ la PWA caricava l'app-shell ma la crittografia non si inizializzava → accesso 
 
 **Verifica**: typecheck backend pulito; harness locale (libsodium + OPAQUE sotto la CSP del fix)
 → `startLogin` eseguito, zero errori di console/CSP.
+
+---
+
+## Addendum Fase 4 (26/11) — secondo fattore (MFA/TOTP) nell'accesso · Esito: **nessun bloccante**
+
+**Lacuna trovata nel test su telefono reale.** Dopo il fix CSP il login superava la password ma
+si fermava: gli account con MFA attiva ricevono `state: "mfa_pending"` e lo scheletro non aveva lo
+step del codice (`session.signIn` lanciava "Serve un codice MFA"). Aggiunto il secondo fattore
+riusando **le stesse funzioni del client SDK già usate dall'estensione** (`verifyMfa`,
+`trustDevice`) — nessuna modifica all'SDK né al backend.
+
+**Flusso implementato** (`pwa/src/session.ts`, `app.tsx`, `styles.css`)
+- `signIn` passa `deviceToken` a `login`; se torna `mfa_pending` tiene in RAM `{api, password}` e
+  ritorna `"mfa"`; la UI mostra lo schermo codice (6 cifre TOTP **o** codice di riserva).
+- `completeMfa(code, trust)` → `verifyMfa(api, code)`; se `trust`, `trustDevice` e salva il
+  `deviceToken`; poi `Vault.unlock`. `cancelMfa()` e `lock()` azzerano il pending.
+
+**Analisi di sicurezza**
+- **Password in RAM tra i due passaggi**: necessaria perché lo sblocco post-MFA deriva la master
+  key dalla password; tenuta solo in `pending`, azzerata a completamento, annullamento e `lock()`.
+  Nessuna scrittura su disco. Stesso modello dell'estensione.
+- **`deviceToken` a riposo (IndexedDB)**: è un bearer che salta **solo il secondo fattore**, non la
+  master password (primo fattore, mai memorizzato). Da solo è inutile: ogni accesso richiede comunque
+  la master password (OPAQUE) e ogni sblocco la ri-deriva. Scadenza lato server (30 gg). Opt-in
+  (checkbox). È il modello "dispositivo attendibile" già in uso nell'app nativa/estensione
+  («il token va conservato solo su questo dispositivo»). Azzerato al `logout` (`wipeAll`).
+- **Nessun oracolo**: codice errato → `ApiError` → messaggio generico "Codice non valido o scaduto";
+  `verifyMfa` fallito **non** scarta il pending → nuovo tentativo possibile senza re-login.
+- **Token di sessione**: la verifica avviene sulla stessa `api`/token del login; `/me` (sblocco)
+  funziona solo dopo che il server ha portato la sessione ad `active`. Il token resta in RAM.
+- **Offline invariato**: `unlockLocal` non tocca la rete e legge `/me` dalla cache, popolata solo da
+  un precedente login online **già passato per l'MFA** → nessuna nuova esposizione offline. H1/H2/H3
+  invariati.
+- `trustDevice` in try/catch: se disattivato sul server si prosegue senza, nessun crash.
+
+**Verifica**: typecheck `pwa` pulito + build esbuild ok. Test end-to-end del codice MFA su istanza
+pentest (account di test con TOTP) dopo il deploy.
