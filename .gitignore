@@ -1,3 +1,7 @@
+# Indice repository NS8 generato localmente (vedi ns8-repo/)
+.dst/
+ns8-repo/repodata.json
+
 # Logs
 logs
 *.log

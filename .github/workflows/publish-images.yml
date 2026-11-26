@@ -47,3 +47,74 @@ jobs:
             fi
             echo "::notice title=Immagine pubblicata::${image}:${IMAGETAG}"
           done
+
+  # Su un tag di release (dopo che l'immagine e' su ghcr) rigenera l'indice
+  # del repository NS8 (repodata.json) interrogando i tag pubblicati e lo
+  # serve via HTTPS su GitHub Pages, cosi' il modulo e i suoi aggiornamenti
+  # compaiono nel Software Center dei cluster iscritti al repository.
+  repodata:
+    name: Indice repository per il Software Center
+    needs: publish
+    if: github.ref_type == 'tag'
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      packages: read
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Installa skopeo e dipendenze Python
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y skopeo
+          python3 -m pip install --upgrade pip
+          pip3 install -r ns8-repo/requirements.txt
+
+      - name: Login su ghcr.io per skopeo
+        run: echo "${{ secrets.GITHUB_TOKEN }}" | skopeo login ghcr.io -u "${{ github.actor }}" --password-stdin
+
+      - name: Prepara la directory del catalogo (.dst)
+        run: |
+          set -euo pipefail
+          DST=".dst"
+          MOD="startcredentials"
+          rm -rf "$DST"
+          mkdir -p "$DST/$MOD"
+          # La fonte unica dei metadati del modulo e' ui/public/metadata.json
+          cp ui/public/metadata.json "$DST/$MOD/metadata.json"
+          # Logo: usa quello dedicato se presente, altrimenti il logo di modulo
+          if [ -f ns8-repo/startcredentials/logo.png ]; then
+            cp ns8-repo/startcredentials/logo.png "$DST/$MOD/logo.png"
+          elif [ -f ui/src/assets/module_default_logo.png ]; then
+            cp ui/src/assets/module_default_logo.png "$DST/$MOD/logo.png"
+          fi
+          # Screenshot opzionali (PNG 1024x768)
+          if [ -d ns8-repo/startcredentials/screenshots ]; then
+            cp -r ns8-repo/startcredentials/screenshots "$DST/$MOD/screenshots"
+          fi
+
+      - name: Genera repodata.json
+        run: |
+          python3 ns8-repo/createrepo.py .dst
+          echo "----- repodata.json -----"
+          python3 -m json.tool .dst/repodata.json
+
+      - name: Valida repodata.json contro lo schema NS8
+        run: python3 ns8-repo/validate-repodata.py .dst/repodata.json ns8-repo/repodata-schema.json
+
+      - name: Configura GitHub Pages
+        uses: actions/configure-pages@v5
+
+      - name: Carica l'artifact del repository
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: .dst
+
+      - name: Pubblica su GitHub Pages
+        id: deploy
+        uses: actions/deploy-pages@v4
