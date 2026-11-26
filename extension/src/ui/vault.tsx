@@ -1429,6 +1429,109 @@ function SecureSendDialog({ vault, item, policy, onClose }: {
   );
 }
 
+/** Invio sicuro "ad hoc": un segreto digitato al momento, cifrato qui e non salvato nel vault. */
+export function AdHocSecureSendDialog({ vault, policy, onClose }: {
+  vault: Vault; policy?: { enabled: boolean; maxHours: number; domains: string[] }; onClose: () => void;
+}) {
+  const maxHours = policy?.maxHours ?? 168;
+  const durations = ([[1, "1 ora"], [24, "1 giorno"], [72, "3 giorni"], [168, "7 giorni"], [336, "14 giorni"], [720, "30 giorni"]] as const)
+    .filter(([h]) => h <= maxHours);
+  const [to, setTo] = useState("");
+  const [phone, setPhone] = useState("");
+  const wa = whatsappNumber(phone);
+  const [hours, setHours] = useState<number>(durations.find(([h]) => h === 24)?.[0] ?? durations[0]![0]);
+  const [views, setViews] = useState(1);
+  const [name, setName] = useState("");
+  const [username, setUsername] = useState("");
+  const [password, setPassword] = useState("");
+  const [url, setUrl] = useState("");
+  const [notes, setNotes] = useState("");
+  const [res, setRes] = useState<{ code: string; link: string; emailed: boolean } | null>(null);
+  const { busy, error, run } = useAction();
+  const hasData = !!(username || password || url || notes);
+  if (res) {
+    return (
+      <Dialog title="Invio sicuro creato" onClose={onClose}>
+        <div class="stack">
+          <div class={`notice ${res.emailed ? "ok" : "warn"}`}>
+            {res.emailed ? `Collegamento inviato per email a ${to.trim().toLowerCase()}.` : "Email non inviata: manda tu il collegamento qui sotto."}
+          </div>
+          <label class="field">Codice di accesso: comunicalo per un canale diverso dall'email (SMS, WhatsApp, telefono). Non viene salvato: annotalo ora se serve.
+            <div class="input-group"><div class="share-box mono" style="font-size:18px;letter-spacing:2px;flex:1">{res.code}</div><CopyButton value={res.code} /></div>
+          </label>
+          <div class="row" style="align-items:center">
+            <a class="btn" href={whatsappCodeLink(res.code, wa || "")} target="_blank" rel="noopener noreferrer">
+              {wa ? `Invia il codice su WhatsApp a +${wa}` : "Invia il codice su WhatsApp"}
+            </a>
+            <span class="small muted grow">
+              {wa ? "Si apre WhatsApp con il messaggio già scritto: controlla e premi invia." : "Si apre WhatsApp con il messaggio già scritto: scegli tu il contatto."} Nel messaggio c'è solo il codice, non il collegamento.
+            </span>
+          </div>
+          <label class="field">Collegamento (già nell'email; serve solo per un invio manuale)
+            <div class="input-group"><input class="input mono" readOnly value={res.link} /><CopyButton value={res.link} /></div>
+          </label>
+          <p class="small muted">Il segreto non è stato salvato nel vault. Riceverai un'email a ogni apertura e puoi revocare l'invio da Impostazioni → Invii sicuri.</p>
+          <div class="row" style="justify-content:flex-end"><button class="btn primary" onClick={onClose}>Fatto</button></div>
+        </div>
+      </Dialog>
+    );
+  }
+  return (
+    <Dialog title="Nuovo invio sicuro" onClose={onClose}>
+      <form class="stack" onSubmit={(e) => {
+        e.preventDefault();
+        run(async () => setRes(await vault.createAdHocSecureSend(
+          { name, username: username || undefined, password: password || undefined, urls: url ? [url] : undefined, notes: notes || undefined },
+          { recipientEmail: to, expiresInHours: hours, maxViews: views })));
+      }}>
+        <p class="small muted">Scrivi qui il segreto da inviare: viene cifrato su questo dispositivo e <b>non viene salvato</b> nel tuo vault. Il destinatario riceve per email un collegamento; per aprirlo serve un codice che gli comunicherai tu per un altro canale.</p>
+        <label class="field">Email del destinatario
+          <input class="input" type="email" required value={to} onInput={(e) => setTo(e.currentTarget.value)} placeholder="referente@cliente.it" />
+        </label>
+        {policy?.domains?.length ? <p class="small muted">Domini ammessi: {policy.domains.join(", ")}</p> : null}
+        <label class="field">Etichetta (facoltativa)
+          <input class="input" value={name} onInput={(e) => setName(e.currentTarget.value)} placeholder="Es. Accesso portale" />
+        </label>
+        <label class="field">Nome utente (facoltativo)
+          <input class="input" autoComplete="off" value={username} onInput={(e) => setUsername(e.currentTarget.value)} />
+        </label>
+        <label class="field">Password o segreto
+          <input class="input" type="text" autoComplete="off" value={password} onInput={(e) => setPassword(e.currentTarget.value)} placeholder="Il valore da inviare" />
+        </label>
+        <label class="field">Indirizzo del sito (facoltativo)
+          <input class="input" type="url" autoComplete="off" value={url} onInput={(e) => setUrl(e.currentTarget.value)} placeholder="https://" />
+        </label>
+        <label class="field">Note (facoltative)
+          <textarea class="input" rows={2} value={notes} onInput={(e) => setNotes(e.currentTarget.value)} />
+        </label>
+        <label class="field">Cellulare per il codice su WhatsApp (facoltativo)
+          <input class="input" type="tel" inputMode="tel" autoComplete="off" value={phone} onInput={(e) => setPhone(e.currentTarget.value)} placeholder="+39 333 1234567" />
+          {wa === null
+            ? <span class="small" style="color:var(--danger)">Numero non valido: usa il prefisso internazionale, per esempio +39 333 1234567.</span>
+            : <span class="small muted">Serve solo ad aprire WhatsApp sul contatto giusto: non viene salvato.</span>}
+        </label>
+        <div class="row">
+          <label class="field grow">Scadenza
+            <select class="input" value={hours} onChange={(e) => setHours(Number(e.currentTarget.value))}>
+              {durations.map(([h, l]) => <option value={h}>{l}</option>)}
+            </select>
+          </label>
+          <label class="field grow">Aperture consentite
+            <select class="input" value={views} onChange={(e) => setViews(Number(e.currentTarget.value))}>
+              {[1, 2, 3, 5].map((n) => <option value={n}>{n === 1 ? "Una sola" : n}</option>)}
+            </select>
+          </label>
+        </div>
+        <ErrorNote error={error} />
+        <div class="row" style="justify-content:flex-end">
+          <button type="button" class="btn" onClick={onClose}>Annulla</button>
+          <button class="btn primary" disabled={busy || wa === null || !hasData}>{busy ? "Cifratura…" : "Crea l'invio"}</button>
+        </div>
+      </form>
+    </Dialog>
+  );
+}
+
 function ItemShareDialog({ vault, item, onClose }: { vault: Vault; item: Item; onClose: () => void }) {
   const shares = useLoad(() => vault.itemShares(item.id), [item.id]);
   const dir = useLoad(() => vault.directory(true), []);
