@@ -31,26 +31,20 @@ Lo scheletro non è ancora nei `workspaces` della root. Per compilarlo/pacchetti
 aggiungere `"pwa"` ai workspaces e lanciare `npm install` una volta (risolve `esbuild`).
 Il **typecheck** gira già con i pacchetti hoistati (`preact`, `@startcredentials/client`).
 
-## Collegamento al backend (da aggiungere a `app/src/server.ts`)
+## Collegamento al backend — rotta `/m` (implementata)
 
-Serve l'app-shell su `/m` con CSP stretta, stessa origine dell'API (niente CORS):
+Il backend serve l'app-shell sotto **`/m/`** con CSP stretta, stessa origine dell'API
+(niente CORS). Vedi `app/src/server.ts` (`PWA_CSP`, rotte `/m`, `/m/`, `/m/<asset>`):
 
-```ts
-const PWA_CSP = "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self'; " +
-  "connect-src 'self'; manifest-src 'self'; worker-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'";
-const pwaDir = join(APP_ROOT, "..", "pwa", "dist");
-const file = (n: string, type: string) =>
-  app.get(`/m/${n}`, async (_r, reply) => reply.type(type).header("Content-Security-Policy", PWA_CSP).send(readFileSync(join(pwaDir, n))));
-app.get("/m", async (_r, reply) => reply.type("text/html; charset=utf-8").header("Content-Security-Policy", PWA_CSP).send(readFileSync(join(pwaDir, "index.html"))));
-file("app.js", "text/javascript; charset=utf-8");
-file("sw.js", "text/javascript; charset=utf-8");          // scope "./": servilo sotto /m
-file("styles.css", "text/css; charset=utf-8");
-file("manifest.webmanifest", "application/manifest+json");
-file("icon.svg", "image/svg+xml");
-```
+- `/m` → redirect 301 a `/m/` (base con slash finale: le risorse relative si risolvono sotto `/m/`);
+- `/m/` → `index.html`; `/m/app.js`, `/m/sw.js`, `/m/styles.css`, `/m/manifest.webmanifest`, `/m/icon.svg`;
+- lettura pigra da `app/public/m/` con cache in memoria e **404 se la build manca** (il server parte comunque);
+- il service worker servito a `/m/sw.js` ha scope `/m/`.
 
-> Il backend è lasciato **intatto**: lo snippet va applicato e rivisto insieme alla
-> revisione di sicurezza, non prima.
+`npm run build` (in `pwa/`) genera `dist/` **e** lo copia in `app/public/m/`, da dove il
+backend lo serve — stesso schema con cui l'estensione scrive il suo zip in `app/public`.
+I file in `app/public/m/` sono **artefatti di build** (non versionati): vanno rigenerati
+con `npm run build -w pwa` nel pipeline di deploy.
 
 ## Note di sicurezza (vedi §6/§10 del documento)
 
