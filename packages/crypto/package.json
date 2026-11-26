@@ -14,11 +14,11 @@
     "test": "tsc -p . && node --test dist/test/*.test.js"
   },
   "dependencies": {
-    "libsodium-wrappers-sumo": "0.7.15",
+    "libsodium-wrappers-sumo": "0.8.4",
     "@noble/hashes": "1.8.0"
   },
   "devDependencies": {
-    "@types/libsodium-wrappers-sumo": "0.7.8",
+    "@types/libsodium-wrappers-sumo": "0.8.2",
     "@types/node": "22.10.2",
     "typescript": "5.7.2"
   }
