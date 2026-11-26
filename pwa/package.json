@@ -1,0 +1,20 @@
+{
+  "name": "@startcredentials/pwa",
+  "version": "0.1.0",
+  "private": true,
+  "license": "GPL-3.0-or-later",
+  "type": "module",
+  "description": "Scheletro web-app mobile (PWA) con lettura offline, sopra @startcredentials/client",
+  "scripts": {
+    "typecheck": "tsc --noEmit -p .",
+    "build": "tsc --noEmit -p . && node build.mjs"
+  },
+  "dependencies": {
+    "@startcredentials/client": "0.7.15",
+    "preact": "10.25.4"
+  },
+  "devDependencies": {
+    "esbuild": "0.28.2",
+    "typescript": "5.7.2"
+  }
+}
