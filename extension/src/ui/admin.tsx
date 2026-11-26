@@ -770,10 +770,15 @@ export function SettingsPage({ vault }: { vault: Vault }) {
       <div class="card pad stack" style="max-width:640px">
         <h3>Sicurezza</h3>
         <label class="field">Blocco automatico dopo
-          <select class="input" value={s.data.autoLockMinutes} onChange={async (e) => { await saveSettings({ autoLockMinutes: Number(e.currentTarget.value) }); s.reload(); toast("Salvato"); }}>
+          <select class="input" disabled={!!s.data.keepUnlockedUntilClose} value={s.data.autoLockMinutes} onChange={async (e) => { await saveSettings({ autoLockMinutes: Number(e.currentTarget.value) }); s.reload(); toast("Salvato"); }}>
             {[1, 5, 15, 30, 60, 240].map((m) => <option value={m}>{m < 60 ? `${m} minuti` : `${m / 60} ${m === 60 ? "ora" : "ore"}`} di inattività</option>)}
           </select>
         </label>
+        <label class="check">
+          <input type="checkbox" checked={!!s.data.keepUnlockedUntilClose} onChange={async (e) => { await saveSettings({ keepUnlockedUntilClose: e.currentTarget.checked }); s.reload(); toast("Salvato"); }} />
+          Mantieni sbloccata fino alla chiusura del browser
+        </label>
+        <p class="small muted">Se attiva, disabilita il blocco automatico per inattività. Le chiavi restano solo nella memoria del browser (mai su disco) e si azzerano alla chiusura del browser o con «Blocca ora». Comodo ma meno sicuro su un dispositivo condiviso.</p>
         <label class="field">Svuota gli appunti dopo
           <select class="input" value={s.data.clipboardSeconds} onChange={async (e) => { await saveSettings({ clipboardSeconds: Number(e.currentTarget.value) }); s.reload(); toast("Salvato"); }}>
             {[30, 60, 120].map((x) => <option value={x}>{x} secondi</option>)}

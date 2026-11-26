@@ -14,6 +14,8 @@ export interface Settings {
   email?: string;
   pinnedOrgSignPublic?: string;
   autoLockMinutes: number;
+  /** Se attivo, disabilita il blocco automatico per inattività: la sessione resta sbloccata finché il browser non viene chiuso. */
+  keepUnlockedUntilClose?: boolean;
   clipboardSeconds: number;
   inlineIcon?: boolean;
   /** Proposta di salvare le password inviate sui siti (richiede l'icona nei campi). */
@@ -119,6 +121,7 @@ export async function hasToken(): Promise<boolean> {
 /** Chiamato dal service worker ogni minuto. */
 export async function lockIfIdle(): Promise<void> {
   const [s, settings] = await Promise.all([getSession(), getSettings()]);
+  if (settings.keepUnlockedUntilClose) return;
   if (s.vault && s.lastActivity && Date.now() - s.lastActivity > settings.autoLockMinutes * 60_000) await lock();
 }
 

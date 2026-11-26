@@ -91,6 +91,7 @@ async function storeCapture(tabId: number, url: string, username: string, passwo
 async function lockIfIdle(): Promise<void> {
   const { s } = await chrome.storage.session.get("s");
   const { settings } = await chrome.storage.local.get("settings");
+  if (settings?.keepUnlockedUntilClose) return;
   const minutes = Number(settings?.autoLockMinutes ?? 15);
   if (s?.vault && s.lastActivity && Date.now() - s.lastActivity > minutes * 60_000) {
     await chrome.storage.session.set({ s: { ...s, vault: undefined } });
