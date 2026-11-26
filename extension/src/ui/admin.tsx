@@ -1,11 +1,11 @@
 import { useState } from "preact/hooks";
 import {
-  ApiError, ClientImportSummary, Container, effectiveTotpUri, generatePassword, import1Password, importAsClients, importBitwarden, importCsv, importInto, importKeePass, ImportResult, importStartCredentials, passwordPolicy, planClientImport, Vault,
+  ApiError, ClientImportSummary, Container, effectiveTotpUri, generatePassword, import1Password, importAsClients, importBitwarden, importCsv, importInto, importKeePass, ImportResult, importStartCredentials, passwordPolicy, planClientImport, serverStatus, Vault,
 } from "@startcredentials/client";
 import { ACTION_LABEL, disableInlineIcon, download, enableInlineIcon, getSettings, initials, loadVersions, lock, saveSettings, signOut, storeVault } from "../shared";
 import { BackupCodes } from "./auth";
 import { CopyButton, Dialog, ErrorNote, Meter, useAction, useLoad, useToast } from "./kit";
-import { go } from "./vault";
+import { AdHocSecureSendDialog, go } from "./vault";
 
 type AdminUser = Awaited<ReturnType<Vault["users"]>>[number];
 
@@ -1029,23 +1029,31 @@ const SEND_STATUS: Record<string, string> = { active: "Attivo", consumed: "Apert
 /** Invii sicuri creati dall'utente: stato, aperture, revoca. */
 function SecureSendsCard({ vault }: { vault: Vault }) {
   const [tick, setTick] = useState(0);
+  const [compose, setCompose] = useState(false);
   const list = useLoad(() => vault.secureSends(), [tick]);
+  const policy = useLoad(() => serverStatus(vault.api), []);
   const { busy, error, run } = useAction();
-  if (!list.data?.length) return null;
+  const enabled = policy.data?.policy?.secureSend?.enabled !== false;
   return (
     <div class="card pad stack" style="max-width:640px">
-      <h3>Invii sicuri</h3>
-      <div class="small muted">Credenziali inviate a destinatari esterni. Un invio attivo si può revocare: il contenuto cifrato viene cancellato subito.</div>
-      {list.data.slice(0, 30).map((s) => (
-        <div class="row between" style="align-items:center">
-          <div>
-            <div style="font-weight:500">{s.recipientEmail}</div>
-            <div class="small muted">{SEND_STATUS[s.status]} · aperto {s.views} di {s.maxViews} · {s.status === "active" ? `scade ${new Date(s.expiresAt).toLocaleString("it-IT")}` : `creato ${new Date(s.createdAt).toLocaleString("it-IT")}`}</div>
+      <div class="row between" style="align-items:center">
+        <h3>Invii sicuri</h3>
+        {enabled && <button class="btn sm" onClick={() => setCompose(true)}>Nuovo invio</button>}
+      </div>
+      <div class="small muted">Invia una password in modo sicuro a un destinatario esterno: la digiti al momento e <b>non viene salvata</b> nel vault. Un invio attivo si può revocare: il contenuto cifrato viene cancellato subito.</div>
+      {list.data?.length
+        ? list.data.slice(0, 30).map((s) => (
+          <div class="row between" style="align-items:center">
+            <div>
+              <div style="font-weight:500">{s.recipientEmail}</div>
+              <div class="small muted">{SEND_STATUS[s.status]} · aperto {s.views} di {s.maxViews} · {s.status === "active" ? `scade ${new Date(s.expiresAt).toLocaleString("it-IT")}` : `creato ${new Date(s.createdAt).toLocaleString("it-IT")}`}</div>
+            </div>
+            {s.status === "active" && <button class="btn sm ghost danger" disabled={busy} onClick={() => run(async () => { await vault.revokeSecureSend(s.id); setTick((t) => t + 1); })}>Revoca</button>}
           </div>
-          {s.status === "active" && <button class="btn sm ghost danger" disabled={busy} onClick={() => run(async () => { await vault.revokeSecureSend(s.id); setTick((t) => t + 1); })}>Revoca</button>}
-        </div>
-      ))}
+        ))
+        : <p class="small muted">Nessun invio attivo.</p>}
       <ErrorNote error={error} />
+      {compose && <AdHocSecureSendDialog vault={vault} policy={policy.data?.policy?.secureSend} onClose={() => { setCompose(false); setTick((t) => t + 1); }} />}
     </div>
   );
 }

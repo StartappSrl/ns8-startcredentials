@@ -1275,6 +1275,29 @@ export class Vault {
     return { ...r, code };
   }
 
+  /**
+   * Invio sicuro "ad hoc": un segreto digitato al momento, cifrato qui e inviato
+   * SENZA salvarlo come elemento del vault. Non serve alcun contenitore: basta
+   * essere autenticati. Stesso modello E2EE dell'invio da un elemento.
+   */
+  async createAdHocSecureSend(input: {
+    name: string; username?: string; password?: string; urls?: string[]; notes?: string; totpUri?: string;
+  }, opts: { recipientEmail: string; expiresInHours: number; maxViews?: number }): Promise<{ id: string; code: string; link: string; emailed: boolean }> {
+    const payload: SendPayload = { v: 1, name: input.name.trim() || "Segreto" };
+    if (input.username) payload.username = input.username;
+    if (input.password) payload.password = input.password;
+    if (input.urls?.length) payload.urls = input.urls;
+    if (input.notes) payload.notes = input.notes;
+    if (input.totpUri) payload.totpUri = input.totpUri;
+    if (Object.keys(payload).length <= 2) throw new SecurityError("Inserisci almeno un dato da inviare");
+    const code = newAccessCode();
+    const envelope = await encryptSend(payload, code);
+    const r = await this.api.post<{ id: string; link: string; emailed: boolean }>("/sends", {
+      recipientEmail: opts.recipientEmail.trim(), envelope, expiresInHours: opts.expiresInHours, maxViews: opts.maxViews ?? 1,
+    });
+    return { ...r, code };
+  }
+
   async secureSends(): Promise<{
     id: string; containerId: string | null; itemId: string | null; recipientEmail: string; createdAt: string; expiresAt: string;
     maxViews: number; views: number; lastOpenedAt: string | null; status: "active" | "consumed" | "expired" | "revoked";

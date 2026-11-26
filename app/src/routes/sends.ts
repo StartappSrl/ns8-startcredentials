@@ -40,12 +40,15 @@ export async function sendRoutes(app: FastifyInstance, ctx: Ctx) {
     const p = policy();
     if (!p.enabled) throw new HttpError(403, "secure_send_disabled", "L'invio sicuro è disattivato dall'amministratore");
     const body = z.object({
-      containerId: uuid,
-      itemId: uuid,
+      // Omessi insieme = invio "ad hoc": un segreto digitato al momento, non legato a un elemento salvato.
+      containerId: uuid.optional(),
+      itemId: uuid.optional(),
       recipientEmail: z.string().trim().toLowerCase().email().max(200),
       envelope: envelopeSchema,
       expiresInHours: z.number().int().min(1).max(24 * 30),
       maxViews: z.number().int().min(1).max(10),
+    }).refine((b) => (b.containerId === undefined) === (b.itemId === undefined), {
+      message: "containerId e itemId vanno indicati insieme",
     }).parse(req.body);
     if (body.expiresInHours > p.maxHours) throw badRequest("expiry_too_long", `La scadenza massima consentita è di ${p.maxHours / 24} giorni`);
     const domain = body.recipientEmail.split("@")[1]!;
@@ -55,16 +58,19 @@ export async function sendRoutes(app: FastifyInstance, ctx: Ctx) {
     const token = newToken();
     const id = randomUUID();
     const sender = await tx(db, async (c) => {
-      // Inviare all'esterno richiede almeno il permesso di modifica sul cliente.
-      await requirePermission(c, body.containerId, a.id, "write");
-      const it = await c.query("SELECT 1 FROM items WHERE id = $1 AND container_id = $2 AND deleted_at IS NULL", [body.itemId, body.containerId]);
-      if (!it.rowCount) throw notFound("item_not_found");
+      // Da un elemento salvato: inviare all'esterno richiede almeno il permesso di modifica sul cliente.
+      // Invio ad hoc (senza elemento): nessun contenitore da autorizzare, basta l'autenticazione.
+      if (body.containerId && body.itemId) {
+        await requirePermission(c, body.containerId, a.id, "write");
+        const it = await c.query("SELECT 1 FROM items WHERE id = $1 AND container_id = $2 AND deleted_at IS NULL", [body.itemId, body.containerId]);
+        if (!it.rowCount) throw notFound("item_not_found");
+      }
       await c.query(
         `INSERT INTO secure_sends (id, token_hash, created_by, container_id, item_id, recipient_email, envelope, expires_at, max_views)
          VALUES ($1,$2,$3,$4,$5,$6,$7, now() + make_interval(hours => $8), $9)`,
-        [id, tokenHash(cfg, token), a.id, body.containerId, body.itemId, body.recipientEmail, JSON.stringify(body.envelope), body.expiresInHours, body.maxViews]);
-      await audit(c, { actorId: a.id, action: "send.created", targetType: "item", targetId: body.itemId, containerId: body.containerId, ip: req.ip,
-        details: { sendId: id, recipient: body.recipientEmail, hours: body.expiresInHours, maxViews: body.maxViews } });
+        [id, tokenHash(cfg, token), a.id, body.containerId ?? null, body.itemId ?? null, body.recipientEmail, JSON.stringify(body.envelope), body.expiresInHours, body.maxViews]);
+      await audit(c, { actorId: a.id, action: "send.created", targetType: body.itemId ? "item" : "send", targetId: body.itemId, containerId: body.containerId, ip: req.ip,
+        details: { sendId: id, recipient: body.recipientEmail, hours: body.expiresInHours, maxViews: body.maxViews, adHoc: !body.itemId } });
       return (await c.query("SELECT display_name FROM users WHERE id = $1", [a.id])).rows[0].display_name as string;
     });
     // Il collegamento porta il token nel frammento (#): il browser non lo invia mai al server nelle richieste di pagina.
