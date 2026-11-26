@@ -783,6 +783,7 @@ export function ContainerView({ vault, id, focusItem, onChanged }: { vault: Vaul
           {canManage && c.kind === "client" && <button class="btn" onClick={() => setEditMeta(true)}>Modifica cliente</button>}
           {canManage && c.kind === "client" && <button class="btn" onClick={() => setSharing(true)}>Condividi</button>}
           {canManage && c.kind === "client" && <button class="btn" onClick={() => setEmergency(true)}>Accesso d'emergenza</button>}
+          {canWrite && c.kind === "personal" && <a class="btn" href="#/import/personale">Importa</a>}
           {canWrite && <button class="btn" onClick={() => setNewFolder(true)}>Nuova cartella</button>}
           {canWrite && <button class="btn primary" onClick={() => setEditing("new")}>Nuovo elemento</button>}
         </div>
@@ -843,6 +844,7 @@ export function ContainerView({ vault, id, focusItem, onChanged }: { vault: Vaul
             <div class="empty">
               <h3>{tab === "trash" ? "Il cestino è vuoto" : filtering ? "Nessun risultato" : cur ? "Cartella vuota" : "Nessun elemento senza cartella"}</h3>
               {!filtering && canWrite && <button class="btn primary" onClick={() => setEditing("new")}>Aggiungi una password</button>}
+              {!filtering && canWrite && c.kind === "personal" && <p class="small">Oppure <a href="#/import/personale">importa le tue password</a> da un altro gestore.</p>}
               {!filtering && canWrite && showFolders && <p class="small">Puoi anche trascinare qui le password da un'altra cartella.</p>}
               {tab === "trash" && <p class="small">Gli elementi eliminati restano qui 30 giorni.</p>}
             </div>

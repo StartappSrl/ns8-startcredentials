@@ -610,6 +610,109 @@ export function Import({ vault, containers, onChanged }: { vault: Vault; contain
   );
 }
 
+// ------------------------------------------------------------------ import personale
+
+/**
+ * Import delle proprie password nella "Area personale" (contenitore kind:personal),
+ * aperto a qualunque utente. Riusa gli stessi parser dell'import clienti ma senza la
+ * logica "un cliente per cartella": tutto finisce, cifrato, nel solo contenitore personale.
+ */
+export function PersonalImport({ vault, onChanged }: { vault: Vault; onChanged: () => void }) {
+  const [source, setSource] = useState<(typeof SOURCES)[number]["id"]>("keepass");
+  const [file, setFile] = useState<File | null>(null);
+  const [kdbxPw, setKdbxPw] = useState("");
+  const [keyFile, setKeyFile] = useState<File | null>(null);
+  const [preview, setPreview] = useState<ImportResult | null>(null);
+  const [progress, setProgress] = useState<string | null>(null);
+  const [done, setDone] = useState<number | null>(null);
+  const { busy, error, run } = useAction();
+  const isKdbx = file?.name.toLowerCase().endsWith(".kdbx");
+
+  const reset = () => { setPreview(null); setFile(null); setKdbxPw(""); setKeyFile(null); };
+
+  const analyse = () => run(async () => {
+    if (!file) throw new Error("Scegli un file");
+    const name = file.name.toLowerCase();
+    let r: ImportResult;
+    if (source === "startcredentials") r = await importStartCredentials(await file.text(), kdbxPw);
+    else if (name.endsWith(".kdbx")) r = await importKeePass(await file.arrayBuffer(), kdbxPw, keyFile ? await keyFile.arrayBuffer() : undefined);
+    else if (name.endsWith(".1pux")) r = import1Password(new Uint8Array(await file.arrayBuffer()));
+    else if (name.endsWith(".json")) r = importBitwarden(await file.text());
+    else r = importCsv(await file.text(), source);
+    if (source !== "startcredentials") r.source = source;
+    setPreview(r);
+  });
+
+  if (done !== null) {
+    return (
+      <div class="card pad stack" style="max-width:680px">
+        <h1>Import completato</h1>
+        <p>{done} {done === 1 ? "elemento cifrato e salvato" : "elementi cifrati e salvati"} nella tua Area personale.</p>
+        <div class="notice warn">Elimina il file di export dal computer: contiene le password in chiaro.</div>
+        <div class="row">
+          <button class="btn primary" onClick={() => go("/personale")}>Apri l'Area personale</button>
+          <button class="btn" onClick={() => { setDone(null); reset(); }}>Importa altro</button>
+        </div>
+      </div>
+    );
+  }
+
+  const totpCount = preview?.items.filter((i) => effectiveTotpUri(i.data)).length ?? 0;
+
+  return (
+    <>
+      <div class="stack" style="gap:4px">
+        <h1>Importa nell'Area personale</h1>
+        <p class="muted">Il file viene letto e cifrato solo su questo computer: il server non lo riceve mai. Le password finiscono nella tua Area personale, visibile solo a te.</p>
+      </div>
+      <div class="card pad stack" style="max-width:680px">
+        <label class="field">Provenienza
+          <select class="input" value={source} onChange={(e) => { setSource(e.currentTarget.value as typeof source); setPreview(null); }}>
+            {SOURCES.map((s) => <option value={s.id}>{s.label}</option>)}
+          </select>
+        </label>
+        <label class="field">File di export
+          <input class="input" type="file" accept={SOURCES.find((s) => s.id === source)!.accept} onChange={(e) => { setFile(e.currentTarget.files?.[0] ?? null); setPreview(null); }} />
+        </label>
+        {(isKdbx || source === "startcredentials") && (
+          <label class="field">{source === "startcredentials" ? "Passphrase dell'export" : "Password del file KeePass (lascia vuoto se l'export non ne ha)"}
+            <input class="input" type="password" value={kdbxPw} onInput={(e) => setKdbxPw(e.currentTarget.value)} />
+          </label>
+        )}
+        {isKdbx && (
+          <label class="field">File chiave (facoltativo, se usato nell'export)
+            <input class="input" type="file" onChange={(e) => { setKeyFile(e.currentTarget.files?.[0] ?? null); setPreview(null); }} />
+          </label>
+        )}
+
+        {preview && (
+          <div class="notice info">
+            Trovati {preview.items.length} elementi e {preview.folders.length} cartelle
+            {totpCount ? `, di cui ${totpCount} con OTP` : ""}.
+            {preview.skipped.length > 0 && ` ${preview.skipped.length} avvisi: ${preview.skipped.slice(0, 3).map((s) => `${s.name} (${s.reason})`).join("; ")}.`}
+          </div>
+        )}
+        <ErrorNote error={error} />
+        <div class="row">
+          {!preview && <button class="btn primary" disabled={busy || !file} onClick={analyse}>{busy ? "Lettura…" : "Analizza il file"}</button>}
+          {preview && (
+            <>
+              <button class="btn primary" disabled={busy || !preview.items.length} onClick={() => run(async () => {
+                const personalId = await vault.ensurePersonal();
+                const n = await importInto(vault, personalId, preview, (d, t) => setProgress(`${d} di ${t}`));
+                setProgress(null);
+                onChanged();
+                setDone(n);
+              })}>{busy ? `Cifratura ${progress ?? ""}` : preview.items.length ? `Importa ${preview.items.length} ${preview.items.length === 1 ? "elemento" : "elementi"}` : "Niente da importare"}</button>
+              <button class="btn" disabled={busy} onClick={() => setPreview(null)}>Scegli un altro file</button>
+            </>
+          )}
+        </div>
+      </div>
+    </>
+  );
+}
+
 // ------------------------------------------------------------------ generatore
 
 export function Generator() {

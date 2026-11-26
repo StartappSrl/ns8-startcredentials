@@ -5,7 +5,7 @@ import { api, currentVault, getSettings, hasToken, saveToken } from "./shared";
 import { AuthFrame, Login, MfaSetup, MfaVerify, parseLink, Pending, Recover, Register, Setup, Unlock, unlockWith } from "./ui/auth";
 import { ErrorNote, ToastHost, useLoad } from "./ui/kit";
 import { Clients, ContainerView, go, SharedItems, Shell, useRoute } from "./ui/vault";
-import { Audit, Generator, Import, Org, SettingsPage, Users } from "./ui/admin";
+import { Audit, Generator, Import, Org, PersonalImport, SettingsPage, Users } from "./ui/admin";
 import { Health, Search } from "./ui/tools";
 import { EmergencyPage } from "./ui/emergency";
 import { Groups } from "./ui/groups";
@@ -157,6 +157,7 @@ function Main({ vault }: { vault: Vault }) {
   else if (route === "/emergenza") page = <EmergencyPage vault={vault} onChanged={containers.reload} />;
   else if (route === "/cerca") page = <Search vault={vault} />;
   else if (route === "/salute" || route.startsWith("/salute/")) page = <Health vault={vault} containerId={route.match(/^\/salute\/([0-9a-f-]{36})$/)?.[1]} />;
+  else if (route === "/import/personale") page = <PersonalImport vault={vault} onChanged={containers.reload} />;
   else if (route === "/import") page = <Import vault={vault} containers={list} onChanged={containers.reload} />;
   else if (route === "/impostazioni") page = <SettingsPage vault={vault} />;
   else if (route === "/admin/utenti" && vault.me.role === "admin") page = <Users vault={vault} />;
