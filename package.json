@@ -6,7 +6,8 @@
     "packages/crypto",
     "packages/client",
     "app",
-    "extension"
+    "extension",
+    "pwa"
   ],
   "scripts": {
     "build": "npm run build -w packages/crypto && npm run build -w packages/client && npm run build -w app && npm run build -w extension",

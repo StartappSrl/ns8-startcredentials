@@ -7,13 +7,16 @@ COPY packages/crypto/package.json packages/crypto/
 COPY packages/client/package.json packages/client/
 COPY app/package.json app/
 COPY extension/package.json extension/
+COPY pwa/package.json pwa/
 RUN npm ci --no-audit --no-fund
 COPY packages packages
 COPY app app
 COPY extension extension
+COPY pwa pwa
 RUN npm run build -w packages/crypto \
  && npm run build -w packages/client \
  && npm run build -w extension \
+ && npm run build -w pwa \
  && npx tsc -p app/tsconfig.build.json \
  && npm prune --omit=dev --no-audit --no-fund \
  && mkdir -p app/node_modules packages/crypto/node_modules packages/client/node_modules
